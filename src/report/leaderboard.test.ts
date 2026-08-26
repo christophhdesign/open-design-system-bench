@@ -154,7 +154,7 @@ test('demo leaderboard is written for a human to open', () => {
     [makeEntry('system-a-demo', 61), makeEntry('system-b-demo', 48), makeEntry('system-c-demo', 72)],
     { generatedAt: '2026-08-25T00:00:00Z' },
   );
-  const dir = mkdtempSync(join(tmpdir(), 'ods-leaderboard-'));
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-leaderboard-'));
   const out = join(dir, 'demo-leaderboard.html');
   writeFileSync(out, html);
   assert.ok(html.startsWith('<!DOCTYPE html>'));

@@ -295,7 +295,7 @@ function buildSystemConfig(answers: InitAnswers, cwd: string): SystemConfig {
   const root = answers.consume === 'npm' ? resolve(answers.root ?? cwd) : resolve(answers.root!);
   const componentsPkg = answers.componentsPkg ?? deriveComponentsPkg(answers);
   const foundationsPkg = answers.foundationsPkg ?? componentsPkg;
-  const rootEnv = `OPEN_DS_BENCH_${answers.systemId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_DIR`;
+  const rootEnv = `OPEN_DESIGN_SYSTEM_BENCH_${answers.systemId.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_DIR`;
   // 'none' (not chosen yet) and unset both fall back to a schema-valid
   // 'docgen' placeholder — SystemConfig.catalogStrategy has no "none" value.
   // doctorGradeChecks flags this so it isn't mistaken for a real choice.

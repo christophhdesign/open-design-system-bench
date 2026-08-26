@@ -28,7 +28,7 @@ function tmpCwd(prefix: string): string {
 // ---------------------------------------------------------------------------
 
 test('runInit non-interactive npm answers writes a well-shaped systems.config.json', async () => {
-  const cwd = tmpCwd('odb-init-npm-');
+  const cwd = tmpCwd('odsys-init-npm-');
   try {
     const result = await runInit({
       nonInteractive: true,
@@ -53,7 +53,7 @@ test('runInit non-interactive npm answers writes a well-shaped systems.config.js
     assert.equal(cfg.componentsPkg, '@acme/ui'); // version stripped
     assert.equal(cfg.foundationsPkg, '@acme/ui'); // defaults to componentsPkg
     assert.equal(cfg.cssEntry, '@acme/ui/styles.css');
-    assert.equal(cfg.rootEnv, 'OPEN_DS_BENCH_ACME_DIR');
+    assert.equal(cfg.rootEnv, 'OPEN_DESIGN_SYSTEM_BENCH_ACME_DIR');
     assert.equal(cfg.root, cwd); // npm mode defaults root to cwd when unset
     assert.deepEqual(cfg.agentContext.agentsMd, ['AGENTS.md', 'README.md']);
     assert.ok(['docgen', 'catalog-json'].includes(cfg.catalogStrategy));
@@ -63,7 +63,7 @@ test('runInit non-interactive npm answers writes a well-shaped systems.config.js
 });
 
 test('runInit summary warns when catalogStrategy is left unset in npm mode', async () => {
-  const cwd = tmpCwd('odb-init-npm-warn-');
+  const cwd = tmpCwd('odsys-init-npm-warn-');
   try {
     const result = await runInit({
       nonInteractive: true,
@@ -81,7 +81,7 @@ test('runInit summary warns when catalogStrategy is left unset in npm mode', asy
 // ---------------------------------------------------------------------------
 
 test('running init again with a second id merges without clobbering the first', async () => {
-  const cwd = tmpCwd('odb-init-merge-');
+  const cwd = tmpCwd('odsys-init-merge-');
   try {
     await runInit({ nonInteractive: true, cwd, answers: { systemId: 'first', consume: 'npm', packageSpec: '@first/ui' } });
     const result = await runInit({ nonInteractive: true, cwd, answers: { systemId: 'second', consume: 'npm', packageSpec: '@second/ui' } });
@@ -98,7 +98,7 @@ test('running init again with a second id merges without clobbering the first', 
 });
 
 test('running init again with the same id in non-interactive mode replaces it (no clobbering other ids)', async () => {
-  const cwd = tmpCwd('odb-init-replace-');
+  const cwd = tmpCwd('odsys-init-replace-');
   try {
     await runInit({ nonInteractive: true, cwd, answers: { systemId: 'other', consume: 'npm', packageSpec: '@other/ui' } });
     await runInit({ nonInteractive: true, cwd, answers: { systemId: 'acme', consume: 'npm', packageSpec: '@acme/ui@1.0.0' } });
@@ -115,7 +115,7 @@ test('running init again with the same id in non-interactive mode replaces it (n
 });
 
 test('running init preserves an existing dataDir field in systems.config.json', async () => {
-  const cwd = tmpCwd('odb-init-datadir-');
+  const cwd = tmpCwd('odsys-init-datadir-');
   try {
     writeFileSync(join(cwd, 'systems.config.json'), JSON.stringify({ dataDir: 'data', systems: {} }, null, 2));
     const result = await runInit({ nonInteractive: true, cwd, answers: { systemId: 'acme', consume: 'npm', packageSpec: '@acme/ui' } });
@@ -131,7 +131,7 @@ test('running init preserves an existing dataDir field in systems.config.json', 
 // ---------------------------------------------------------------------------
 
 test('runInit scaffolds three starter tasks into an empty tasks/ dir', async () => {
-  const cwd = tmpCwd('odb-init-tasks-empty-');
+  const cwd = tmpCwd('odsys-init-tasks-empty-');
   try {
     await runInit({ nonInteractive: true, cwd, answers: { systemId: 'acme', consume: 'npm', packageSpec: '@acme/ui' } });
     const files = readdirSync(join(cwd, 'tasks')).sort();
@@ -142,7 +142,7 @@ test('runInit scaffolds three starter tasks into an empty tasks/ dir', async () 
 });
 
 test('runInit never overwrites an existing non-empty tasks/ dir', async () => {
-  const cwd = tmpCwd('odb-init-tasks-nonempty-');
+  const cwd = tmpCwd('odsys-init-tasks-nonempty-');
   try {
     mkdirSync(join(cwd, 'tasks'), { recursive: true });
     writeFileSync(join(cwd, 'tasks', 'custom-task.yaml'), 'id: custom-task\n');
@@ -160,8 +160,8 @@ test('runInit never overwrites an existing non-empty tasks/ dir', async () => {
 // ---------------------------------------------------------------------------
 
 test('runInit source-mode against a synthetic repo produces ok doctor-grade lines', async () => {
-  const repo = tmpCwd('odb-source-repo-');
-  const cwd = tmpCwd('odb-init-source-');
+  const repo = tmpCwd('odsys-source-repo-');
+  const cwd = tmpCwd('odsys-init-source-');
   try {
     mkdirSync(join(repo, 'src'), { recursive: true });
     writeFileSync(join(repo, 'tsconfig.json'), '{}\n');
@@ -199,8 +199,8 @@ test('runInit source-mode against a synthetic repo produces ok doctor-grade line
 });
 
 test('runInit source-mode warns when componentsSrc/tsconfig/docs are missing', async () => {
-  const repo = tmpCwd('odb-source-repo-empty-');
-  const cwd = tmpCwd('odb-init-source-empty-');
+  const repo = tmpCwd('odsys-source-repo-empty-');
+  const cwd = tmpCwd('odsys-init-source-empty-');
   try {
     const result = await runInit({
       nonInteractive: true,
@@ -221,13 +221,13 @@ test('runInit source-mode warns when componentsSrc/tsconfig/docs are missing', a
 // ---------------------------------------------------------------------------
 
 test('runInit throws when consume=source and root does not exist', async () => {
-  const cwd = tmpCwd('odb-init-badsource-');
+  const cwd = tmpCwd('odsys-init-badsource-');
   try {
     await assert.rejects(
       runInit({
         nonInteractive: true,
         cwd,
-        answers: { systemId: 'x', consume: 'source', root: '/definitely/not/a/real/path/open-ds-bench-test' },
+        answers: { systemId: 'x', consume: 'source', root: '/definitely/not/a/real/path/open-design-system-bench-test' },
       }),
       /root/,
     );
@@ -237,7 +237,7 @@ test('runInit throws when consume=source and root does not exist', async () => {
 });
 
 test('runInit throws when consume=npm and packageSpec is empty', async () => {
-  const cwd = tmpCwd('odb-init-badnpm-');
+  const cwd = tmpCwd('odsys-init-badnpm-');
   try {
     await assert.rejects(
       runInit({ nonInteractive: true, cwd, answers: { systemId: 'x', consume: 'npm', packageSpec: '' } }),
@@ -249,7 +249,7 @@ test('runInit throws when consume=npm and packageSpec is empty', async () => {
 });
 
 test('runInit throws when systemId is missing in non-interactive mode', async () => {
-  const cwd = tmpCwd('odb-init-noid-');
+  const cwd = tmpCwd('odsys-init-noid-');
   try {
     await assert.rejects(
       runInit({ nonInteractive: true, cwd, answers: { consume: 'npm', packageSpec: '@acme/ui' } }),
@@ -261,7 +261,7 @@ test('runInit throws when systemId is missing in non-interactive mode', async ()
 });
 
 test('runInit throws when non-interactive mode is missing answers entirely', async () => {
-  const cwd = tmpCwd('odb-init-noanswers-');
+  const cwd = tmpCwd('odsys-init-noanswers-');
   try {
     await assert.rejects(runInit({ nonInteractive: true, cwd }), /answers/);
   } finally {
@@ -274,8 +274,8 @@ test('runInit throws when non-interactive mode is missing answers entirely', asy
 // ---------------------------------------------------------------------------
 
 test('runInit derives componentsPkg from systemId in source mode when not given', async () => {
-  const repo = tmpCwd('odb-source-repo-derive-');
-  const cwd = tmpCwd('odb-init-derive-');
+  const repo = tmpCwd('odsys-source-repo-derive-');
+  const cwd = tmpCwd('odsys-init-derive-');
   try {
     mkdirSync(join(repo, 'src'), { recursive: true });
     const result = await runInit({
@@ -292,7 +292,7 @@ test('runInit derives componentsPkg from systemId in source mode when not given'
 });
 
 test('runInit respects an explicit componentsPkg/foundationsPkg override', async () => {
-  const cwd = tmpCwd('odb-init-override-');
+  const cwd = tmpCwd('odsys-init-override-');
   try {
     const result = await runInit({
       nonInteractive: true,
@@ -314,8 +314,8 @@ test('runInit respects an explicit componentsPkg/foundationsPkg override', async
 });
 
 test('runInit round-trips a catalog-json strategy with catalogFile', async () => {
-  const repo = tmpCwd('odb-source-repo-catjson-');
-  const cwd = tmpCwd('odb-init-catjson-');
+  const repo = tmpCwd('odsys-source-repo-catjson-');
+  const cwd = tmpCwd('odsys-init-catjson-');
   try {
     mkdirSync(join(repo, 'src'), { recursive: true });
     writeFileSync(join(repo, 'catalog.json'), '{}\n');
@@ -346,7 +346,7 @@ test('runInit round-trips a catalog-json strategy with catalogFile', async () =>
 // ---------------------------------------------------------------------------
 
 test('runInit writes systems.config.json as pretty JSON with a trailing newline', async () => {
-  const cwd = tmpCwd('odb-init-format-');
+  const cwd = tmpCwd('odsys-init-format-');
   try {
     const result = await runInit({ nonInteractive: true, cwd, answers: { systemId: 'acme', consume: 'npm', packageSpec: '@acme/ui' } });
     const raw = readFileSync(result.configPath, 'utf8');

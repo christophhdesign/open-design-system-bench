@@ -18,7 +18,7 @@ import { extractDocgenCatalog } from './catalog-docgen.ts';
 import { collectBarrelExports } from './normalize.ts';
 
 function writeSyntheticSystem(): string {
-  const root = mkdtempSync(join(tmpdir(), 'ods-extract-'));
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-'));
   const src = join(root, 'src');
   mkdirSync(src, { recursive: true });
 
@@ -103,7 +103,7 @@ test('collectBarrelExports survives JSX in barrel-target modules instead of sile
 });
 
 test('export * and named re-exports of the same dir merge with export * governing', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'ods-extract-merge-'));
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-merge-'));
   const src = join(root, 'src');
   mkdirSync(join(src, 'Combo'), { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/combo' }));

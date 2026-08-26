@@ -17,7 +17,7 @@ import type { SystemConfig } from '../types.ts';
 function baseNpmConfig(overrides: Partial<SystemConfig> = {}): SystemConfig {
   return {
     root: '/tmp/does-not-need-to-exist-for-these-checks',
-    rootEnv: 'OPEN_DS_BENCH_ACME_DIR',
+    rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_ACME_DIR',
     componentsSrc: 'src',
     componentsPkg: '@acme/ui',
     foundationsPkg: '@acme/ui',
@@ -34,7 +34,7 @@ function baseNpmConfig(overrides: Partial<SystemConfig> = {}): SystemConfig {
 // ---------------------------------------------------------------------------
 
 test('applyCssEntryPlaceholder removes the placeholder import line when cssEntry is absent', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'odb-css-entry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-css-entry-'));
   try {
     mkdirSync(join(dir, 'src'), { recursive: true });
     writeFileSync(
@@ -51,7 +51,7 @@ test('applyCssEntryPlaceholder removes the placeholder import line when cssEntry
 });
 
 test('applyCssEntryPlaceholder rewrites the placeholder to the real import when cssEntry is set', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'odb-css-entry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-css-entry-'));
   try {
     mkdirSync(join(dir, 'src'), { recursive: true });
     writeFileSync(join(dir, 'src', 'main.tsx'), "import '__CSS_ENTRY__';\n");
@@ -63,7 +63,7 @@ test('applyCssEntryPlaceholder rewrites the placeholder to the real import when 
 });
 
 test('applyCssEntryPlaceholder is a no-op when main.tsx has no placeholder (source-mode templates)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'odb-css-entry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-css-entry-'));
   try {
     mkdirSync(join(dir, 'src'), { recursive: true });
     const original = "import '@acme-ui/foundations/index.css';\n";
@@ -76,7 +76,7 @@ test('applyCssEntryPlaceholder is a no-op when main.tsx has no placeholder (sour
 });
 
 test('applyCssEntryPlaceholder is a no-op when main.tsx does not exist', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'odb-css-entry-'));
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-css-entry-'));
   try {
     assert.doesNotThrow(() => applyCssEntryPlaceholder(dir, '@acme/ui/styles.css'));
   } finally {

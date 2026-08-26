@@ -1,6 +1,6 @@
 // Orchestrates the seven Tier-0 static-audit checks for one system. No
 // network, no `claude` calls — every check is local file reads + parsing,
-// which is what keeps `open-ds-bench audit` at "scores a repo in <60s with
+// which is what keeps `open-design-system-bench audit` at "scores a repo in <60s with
 // no API key at all" (see ROADMAP.md's P1 exit criterion).
 
 import type { SystemConfig, SystemId } from '../types.ts';

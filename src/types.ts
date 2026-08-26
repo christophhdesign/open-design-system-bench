@@ -1,4 +1,4 @@
-// Shared contracts for open-ds-bench. The Gate/DimensionResult/EvalResult shapes
+// Shared contracts for open-design-system-bench. The Gate/DimensionResult/EvalResult shapes
 // are ported from eval-harness/src/types.ts — the workspace's canonical output
 // contract — so downstream surfaces (CI, dashboards) can consume either tool.
 

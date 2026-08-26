@@ -256,7 +256,7 @@ async function commitBaseline(destDir: string): Promise<void> {
   await execFileAsync(
     'git',
     [
-      '-c', 'user.name=open-ds-bench',
+      '-c', 'user.name=open-design-system-bench',
       '-c', 'user.email=bench@local',
       '-c', 'commit.gpgsign=false',
       'commit', '-m', 'baseline',

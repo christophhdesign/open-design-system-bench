@@ -35,7 +35,7 @@ function writeFile(path: string, content: string): void {
  *    on the alias, misaligned on the convention name.
  */
 function buildSyntheticSystem(): { root: string; cfg: SystemConfig; catalogsDir: string; tokensDir: string; system: string } {
-  const root = mkdtempSync(join(tmpdir(), 'open-ds-bench-audit-'));
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-'));
   const system = 'testkit';
 
   writeFile(join(root, 'AGENTS.md'), '# Testkit agent guide\n\nUse Toggle for on/off state.\n');
@@ -100,7 +100,7 @@ function buildSyntheticSystem(): { root: string; cfg: SystemConfig; catalogsDir:
 
   const cfg: SystemConfig = {
     root,
-    rootEnv: 'OPEN_DS_BENCH_TESTKIT_DIR',
+    rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_TESTKIT_DIR',
     componentsSrc: 'packages/components/src',
     componentsPkg: '@testkit/components',
     foundationsPkg: '@testkit/foundations',
@@ -128,7 +128,7 @@ test('export-hygiene flags the dir reachable via neither the barrel nor the expo
 });
 
 test('export-hygiene counts named value re-exports as reachable, but not type-only re-exports', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'open-ds-bench-audit-named-'));
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-named-'));
   const system = 'namedkit';
   try {
     writeFile(
@@ -147,7 +147,7 @@ test('export-hygiene counts named value re-exports as reachable, but not type-on
 
     const cfg: SystemConfig = {
       root,
-      rootEnv: 'OPEN_DS_BENCH_NAMEDKIT_DIR',
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_NAMEDKIT_DIR',
       componentsSrc: 'packages/components/src',
       componentsPkg: '@namedkit/components',
       foundationsPkg: '@namedkit/foundations',
@@ -203,11 +203,11 @@ test('surface counts AGENTS.md as present', async () => {
 });
 
 test('all seven checks run without throwing on a minimal/empty system', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'open-ds-bench-audit-empty-'));
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-empty-'));
   try {
     const cfg: SystemConfig = {
       root,
-      rootEnv: 'OPEN_DS_BENCH_EMPTY_DIR',
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_EMPTY_DIR',
       componentsSrc: 'src', // does not exist
       componentsPkg: '@empty/components',
       foundationsPkg: '@empty/foundations',

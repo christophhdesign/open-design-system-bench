@@ -1,4 +1,4 @@
-# open-ds-bench
+# open-design-system-bench
 
 **How AI-ready is your design system?** A plug-in benchmark that runs coding agents against your
 component library and grades the output. Built against a production design system and generalized
@@ -123,7 +123,7 @@ React 18 needs pinning against the template's React 19:
   "systems": {
     "acme": {
       "root": "/absolute/path/to/wherever/you/keep/docs",
-      "rootEnv": "OPEN_DS_BENCH_ACME_DIR",
+      "rootEnv": "OPEN_DESIGN_SYSTEM_BENCH_ACME_DIR",
       "componentsSrc": "src",
       "componentsPkg": "@acme/ui",
       "foundationsPkg": "@acme/ui",
@@ -197,7 +197,7 @@ clear component-choice traps); rotate it if a different area gets risky.
 Every run lands in `runs/<timestamp>-<label>/` with `manifest.json`, `results.json`,
 `report.html`, and per-cell artifacts (`diff.patch`, `transcript.jsonl`, `grades.json`,
 `judge.json`, the generated `workspace/src`). Serve reports via the workspace launch config
-`open-ds-bench` → http://localhost:4189.
+`open-design-system-bench` → http://localhost:4189.
 
 Useful during iteration (no agent re-runs — they re-score stored diffs):
 

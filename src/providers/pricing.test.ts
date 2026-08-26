@@ -81,7 +81,7 @@ test('estimateApiCostUsd prices any provider whose model is in the catalog', () 
 });
 
 function writeCatalogFile(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ods-pricing-'));
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-pricing-'));
   const file = join(dir, 'pricing-catalog.json');
   writeFileSync(
     file,
@@ -103,7 +103,7 @@ test('loadPricingCatalog parses a catalog file, and tolerates a missing one', ()
   assert.ok(hit!.pricing.inputCostPerToken > 0);
   assert.ok(hit!.pricing.outputCostPerToken > 0);
   // The catalog is optional: absent means "cost unavailable", never a crash.
-  assert.deepEqual(loadPricingCatalog(join(tmpdir(), 'ods-pricing-does-not-exist.json')), []);
+  assert.deepEqual(loadPricingCatalog(join(tmpdir(), 'odsys-pricing-does-not-exist.json')), []);
 });
 
 test('estimateCostFromModelSpec prices a qualified alias that includes a region tag', () => {

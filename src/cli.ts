@@ -1,4 +1,4 @@
-// open-ds-bench CLI. Exit codes follow the workspace convention (motion-perf-gate):
+// open-design-system-bench CLI. Exit codes follow the workspace convention (motion-perf-gate):
 // 0 ok · 1 fail/regression · 2 usage/config error · 3 inconclusive.
 import { parseArgs } from 'node:util';
 import { execFile } from 'node:child_process';
@@ -19,7 +19,7 @@ import type { ContextLevel, SystemCatalog, SystemId, RunResults } from './types.
 
 const execFileP = promisify(execFile);
 
-const USAGE = `open-ds-bench — design-system agent benchmark
+const USAGE = `open-design-system-bench — design-system agent benchmark
 
 usage: tsx src/cli.ts <command> [options]
 
@@ -486,7 +486,7 @@ async function main(): Promise<number> {
       const ok = results.records.filter((r) => r.status === 'ok').length;
       const bad = results.records.filter((r) => r.status === 'agent-error' || r.status === 'timeout').length;
       console.log(`\nrun ${results.runId}: ${ok} ok, ${bad} errored, ${results.records.length - ok - bad} skipped`);
-      console.log(`report: ${join(runDir, 'report.html')} (serve via launch config "open-ds-bench", port 4189)`);
+      console.log(`report: ${join(runDir, 'report.html')} (serve via launch config "open-design-system-bench", port 4189)`);
       return bad === results.records.length ? 3 : 0;
     }
 

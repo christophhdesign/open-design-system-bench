@@ -1,6 +1,6 @@
-# open-ds-bench — agent instructions
+# open-design-system-bench — agent instructions
 
-You are working on **open-ds-bench**: a benchmark that answers "how AI-ready is your design
+You are working on **open-design-system-bench**: a benchmark that answers "how AI-ready is your design
 system?" by running coding agents against a real component library and grading the output, plus a
 static `audit` that scores AI-readiness in seconds with no API key. This file is the working
 context: what exists, how to work on it, and the decisions not to relitigate. The plan, the
