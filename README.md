@@ -1,5 +1,7 @@
 # open-design-system-bench
 
+![A grid of compass needles on a dark field. On the left they follow one current; on the right they drift into their own directions.](docs/hero-field.svg)
+
 **How AI-ready is your design system?** A plug-in benchmark that runs coding agents against your
 component library and grades the output. Built against a production design system and generalized
 for any React + TypeScript component library.
