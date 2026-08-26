@@ -1,0 +1,39 @@
+{
+  "name": "open-ds-bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "How AI-ready is your design system? A plug-in benchmark that runs coding agents against your component library and grades the output: hallucinated APIs, token discipline, accessibility, compilation, and LLM-judged design quality.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "doctor": "tsx src/cli.ts doctor",
+    "extract": "tsx src/cli.ts extract",
+    "validate-tasks": "tsx src/cli.ts validate-tasks",
+    "run": "tsx src/cli.ts run",
+    "grade": "tsx src/cli.ts grade",
+    "judge": "tsx src/cli.ts judge",
+    "report": "tsx src/cli.ts report",
+    "compare": "tsx src/cli.ts compare",
+    "ci": "tsx src/cli.ts ci",
+    "prune": "tsx src/cli.ts prune",
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.25.0",
+    "@babel/traverse": "^7.25.0",
+    "eslint": "^9.9.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
+    "js-yaml": "^4.1.0",
+    "react-docgen-typescript": "^2.2.2"
+  },
+  "devDependencies": {
+    "@types/babel__traverse": "^7.20.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

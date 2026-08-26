@@ -1,0 +1,20 @@
+id: onboarding-flow
+title: First-run setup flow with progress
+prompt: >-
+  Build the first-run setup flow with three stages: choose a plan, connect
+  your calendar, and import your contacts. Users should see where they are in
+  the flow and be able to move forward and back.
+rubrics:
+  - id: progress-pattern
+    text: Uses the design system's multi-step progress pattern to show position in the flow
+    weight: 0.4
+  - id: system-primitives
+    text: >-
+      Stage content is composed with system primitives (headings, actions,
+      layout), placeholders acceptable
+    weight: 0.3
+  - id: nav-hierarchy
+    text: >-
+      Forward/back controls follow the action hierarchy with correct disabled
+      states at the edges
+    weight: 0.3

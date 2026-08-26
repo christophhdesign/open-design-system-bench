@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      // Dedupe React's types to this workspace's single @types/react(-dom)
+      // install. The kit is consumed from source and pulls in its own peer
+      // "react"/"react-dom" imports from ITS OWN node_modules (a different
+      // physical copy than this workspace's), which otherwise makes
+      // structurally-identical branded types (e.g. React 19's ref cleanup
+      // return type) resolve as nominally distinct across the two copies —
+      // tsc then errors with "Two different types with this name exist, but
+      // they are unrelated." Pointing both consumers at ONE @types location
+      // for the whole program avoids that.
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/client": ["./node_modules/@types/react-dom/client"],
+      "__COMPONENTS_PKG__": ["__SYSTEM_ROOT__/packages/components/src/index.ts"],
+      "__COMPONENTS_PKG__/*": ["__SYSTEM_ROOT__/packages/components/src/*"],
+      "__FOUNDATIONS_PKG__/index.css": [
+        "__SYSTEM_ROOT__/packages/foundations/src/index.css"
+      ]
+    }
+  },
+  "include": ["src"]
+}

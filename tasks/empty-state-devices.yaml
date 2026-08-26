@@ -1,0 +1,17 @@
+id: empty-state-devices
+title: Empty state for the linked devices screen
+prompt: >-
+  The 'linked devices' screen can be empty for new users. Design what they see
+  before any device is linked, including a way to link their first device.
+rubrics:
+  - id: empty-state-composition
+    text: >-
+      Uses an empty-state composition (explanatory heading/description and a
+      clear call to action), not a bare 'no data' string
+    weight: 0.5
+  - id: cta-hierarchy
+    text: The call to action uses the system's action hierarchy correctly
+    weight: 0.3
+  - id: value-copy
+    text: Copy explains the value of linking a device, not just the absence of data
+    weight: 0.2

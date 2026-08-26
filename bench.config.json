@@ -1,0 +1,57 @@
+{
+  "profiles": {
+    "smoke": {
+      "systems": ["my-system"],
+      "contexts": ["bare", "agents-md"],
+      "models": ["sonnet"],
+      "tasks": ["confirm-account-deletion"],
+      "reps": 1
+    },
+    "small": {
+      "systems": ["my-system"],
+      "contexts": ["skill"],
+      "models": ["sonnet"],
+      "tasks": [
+        "confirm-account-deletion",
+        "success-feedback",
+        "settings-toggle-section",
+        "cancel-plan-action-hierarchy",
+        "connection-status-indicator"
+      ],
+      "reps": 1
+    },
+    "medium": {
+      "systems": ["my-system"],
+      "contexts": ["agents-md", "skill"],
+      "models": ["sonnet"],
+      "tasks": "*",
+      "reps": 1
+    },
+    "full": {
+      "systems": ["my-system"],
+      "contexts": ["bare", "agents-md", "skill"],
+      "models": ["sonnet"],
+      "tasks": "*",
+      "reps": 3
+    }
+  },
+  "providers": {
+    "anthropic": { "kind": "anthropic", "baseUrl": "https://api.anthropic.com", "apiKeyEnv": "ANTHROPIC_API_KEY" },
+    "openai": { "kind": "openai", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY" }
+  },
+  "defaults": {
+    "agent": "claude-code",
+    "generatorModel": "sonnet",
+    "judgeModel": "haiku",
+    "taskTimeoutSec": 1800,
+    "judgeTimeoutSec": 120,
+    "concurrency": 2,
+    "judgeSamples": 1,
+    "retryTimeouts": 0,
+    "tasksDir": "./tasks"
+  },
+  "ci": {
+    "maxScoreDrop": 5,
+    "maxErroredCellRatio": 0.2
+  }
+}

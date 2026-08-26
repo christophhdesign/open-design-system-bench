@@ -1,0 +1,18 @@
+id: success-feedback
+title: Transient feedback after saving notification preferences
+prompt: >-
+  After a user saves their notification preferences, give them brief,
+  non-blocking feedback that the save worked.
+rubrics:
+  - id: transient-pattern
+    text: >-
+      Uses the design system's transient feedback pattern, not an inline div,
+      alert dialog, or blocking overlay
+    weight: 0.5
+    critical: true
+  - id: non-intrusive
+    text: Feedback does not steal focus and announces politely to assistive tech
+    weight: 0.3
+  - id: concise-copy
+    text: The message copy is concise and specific about what succeeded
+    weight: 0.2

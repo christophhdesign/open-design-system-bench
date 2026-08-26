@@ -1,0 +1,20 @@
+id: paginated-activity-log
+title: Paginated security activity log
+prompt: >-
+  Show the account's security activity log with columns for event, device,
+  location, and time. There can be thousands of entries; users need to move
+  through them in manageable chunks.
+rubrics:
+  - id: system-pagination
+    text: Uses the design system's page-navigation pattern wired to the data list
+    weight: 0.4
+  - id: page-state
+    text: >-
+      Current position is indicated and edge states (first/last page) are
+      handled sensibly
+    weight: 0.3
+  - id: accessible-table
+    text: >-
+      Row and column semantics are accessible (proper table/list semantics,
+      headers)
+    weight: 0.3

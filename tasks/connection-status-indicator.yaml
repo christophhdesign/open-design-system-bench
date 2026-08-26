@@ -1,0 +1,18 @@
+id: connection-status-indicator
+title: Sync and integration health status indicators
+prompt: >-
+  At the top of the app, show whether background sync is online, reconnecting,
+  or offline. In the integrations list, show each integration's health:
+  operational, degraded, or down.
+rubrics:
+  - id: system-status-components
+    text: >-
+      Uses the system's status/label components with semantic token colors,
+      not hand-colored dots or custom CSS
+    weight: 0.45
+  - id: not-color-only
+    text: States are distinguishable by more than color alone (text or icon)
+    weight: 0.3
+  - id: system-typography
+    text: Status text uses system typography utilities
+    weight: 0.25

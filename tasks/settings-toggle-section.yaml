@@ -1,0 +1,20 @@
+id: settings-toggle-section
+title: Notification preferences settings section
+prompt: >-
+  Create the 'Notification preferences' area of the settings screen with
+  three settings: email digests, push alerts, and product announcements. Each
+  can be turned on or off independently and takes effect immediately.
+rubrics:
+  - id: switch-not-checkbox
+    text: >-
+      Uses the system's on/off switch control (immediate-effect settings),
+      not checkboxes or buttons
+    weight: 0.4
+  - id: label-description
+    text: >-
+      Each setting has a title and supporting description following the
+      system's settings-row pattern
+    weight: 0.35
+  - id: system-layout
+    text: The section is grouped with system layout primitives rather than ad-hoc spacing
+    weight: 0.25

@@ -1,0 +1,18 @@
+{
+  "systems": {
+    "my-system": {
+      "root": "/absolute/path/to/your-design-system-repo",
+      "rootEnv": "OPEN_DS_BENCH_MY_SYSTEM_DIR",
+      "componentsSrc": "src/components",
+      "componentsPkg": "@your-scope/components",
+      "foundationsPkg": "@your-scope/foundations",
+      "foundationsCss": "src/foundations/index.css",
+      "catalogStrategy": "docgen",
+      "agentContext": {
+        "agentsMd": [
+          "AGENTS.md"
+        ]
+      }
+    }
+  }
+}

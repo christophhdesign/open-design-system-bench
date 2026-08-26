@@ -1,0 +1,20 @@
+id: form-validation-errors
+title: Field-level validation errors on the invite form
+prompt: >-
+  Build the 'invite a team member' form: it collects an email address and a
+  role. When submission fails validation, users need to understand what went
+  wrong and where.
+rubrics:
+  - id: inline-field-errors
+    text: >-
+      Errors surface inline at the field level using the system's form field
+      pattern, not as one generic error blob
+    weight: 0.4
+  - id: labels-associated
+    text: >-
+      Fields are properly labelled and error messages are programmatically
+      associated with their inputs
+    weight: 0.35
+  - id: submit-state
+    text: The submit control communicates state appropriately (disabled/loading/enabled)
+    weight: 0.25

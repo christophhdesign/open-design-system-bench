@@ -1,0 +1,23 @@
+id: confirm-account-deletion
+title: Confirmation before account deletion
+prompt: >-
+  In the account settings screen, users can delete their account. Deletion is
+  permanent. Add a step that makes sure users don't delete their account by
+  accident, following our design system.
+rubrics:
+  - id: uses-confirmation-pattern
+    text: >-
+      Reaches for the design system's confirmation dialog pattern rather than
+      a generic overlay, browser confirm(), or inline warning
+    weight: 0.4
+    critical: true
+  - id: destructive-not-default
+    text: >-
+      The destructive action is visually distinct (destructive emphasis) and
+      is NOT the default-focused or visually primary action
+    weight: 0.35
+  - id: easy-backout
+    text: >-
+      The user can easily back out, and the copy states the permanent
+      consequence plainly
+    weight: 0.25

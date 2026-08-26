@@ -1,0 +1,19 @@
+id: cancel-plan-action-hierarchy
+title: Action hierarchy for the subscription closing section
+prompt: >-
+  Create the closing area of the subscription screen: users can keep their
+  current plan, move to a cheaper plan, or cancel their subscription
+  entirely. Make the choices clear without pushing users toward cancelling.
+rubrics:
+  - id: three-emphasis-levels
+    text: The three actions use distinct and correct emphasis levels from the system's action hierarchy
+    weight: 0.45
+    critical: true
+  - id: cancel-not-primary
+    text: >-
+      Cancelling is styled as the quiet/destructive option per system
+      convention, never the visually primary one
+    weight: 0.35
+  - id: order-supports
+    text: Visual order and grouping support the intended hierarchy
+    weight: 0.2
