@@ -2,6 +2,7 @@
   "name": "open-ds-bench",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "How AI-ready is your design system? A plug-in benchmark that runs coding agents against your component library and grades the output: hallucinated APIs, token discipline, accessibility, compilation, and LLM-judged design quality.",
   "engines": {

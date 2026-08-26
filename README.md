@@ -407,3 +407,7 @@ top-level (generated, gitignored) `catalogs/`/`tokens/` dirs.
   benchmark surfaces that rather than papering over it.
 - `context: mcp` is **reserved for the next phase**: rerunning the same suite with a system's MCP
   server attached and comparing against a frozen baseline produces a before/after-MCP KPI.
+
+## License
+
+[MIT](LICENSE)
