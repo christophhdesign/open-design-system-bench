@@ -16,7 +16,40 @@ import { walkFiles } from '../fs-walk.ts';
 import { readJsonSafe, round1, clamp } from '../util.ts';
 
 const CSS_VAR_DECL_RE = /^\s*(--[\w-]+)\s*:\s*(.+?);?\s*$/;
-const DARK_SIGNAL_RE = /prefers-color-scheme\s*:\s*dark|\[data-theme\s*=|data-theme=["']dark["']/i;
+
+// Light/dark theming signal: four independent patterns, any one of which is
+// sufficient. Kept as separate named regexes (rather than one giant
+// alternation) so each one's intent, and its anti-false-positive anchoring,
+// stays legible on its own.
+//
+// 1. The standard media-query form.
+const PREFERS_COLOR_SCHEME_DARK_RE = /prefers-color-scheme\s*:\s*dark/i;
+// 2. Any `data-*theme` or `data-*color-scheme`/`color-mode` attribute, as an
+//    attribute selector ([data-theme=...], [data-mantine-color-scheme=...])
+//    or a plain HTML/JSX attribute. Design systems invent their own prefix
+//    (Mantine's is "data-mantine-color-scheme"), so the infix is a wildcard;
+//    the trailing \b keeps "data-athemepark" (no hyphen before "theme") from
+//    matching.
+const DATA_THEME_ATTR_RE = /data-(?:[a-z0-9]+-)*(?:theme|color-scheme|color-mode)\b/i;
+// 3. A standalone `.dark` class selector, anchored to CSS selector syntax
+//    (whitespace, `{`, `,`, or a combinator immediately after) so it matches
+//    `.dark {` / `html.dark .x` / `.dark, .x` but not `.darker` or prose
+//    that merely contains the word "dark".
+const DARK_CLASS_SELECTOR_RE = /\.dark(?=[\s{,>+~]|$)/;
+// 4. The `color-scheme` CSS property/declaration itself (e.g. `color-scheme:
+//    light dark;`), which is a browser-native dark-mode signal independent
+//    of any custom attribute or media query.
+const COLOR_SCHEME_DECL_RE = /color-scheme\s*:/i;
+
+/** True if `css` contains any recognized light/dark theming signal. Exported for unit testing. */
+export function hasDarkSignal(css: string): boolean {
+  return (
+    PREFERS_COLOR_SCHEME_DARK_RE.test(css) ||
+    DATA_THEME_ATTR_RE.test(css) ||
+    DARK_CLASS_SELECTOR_RE.test(css) ||
+    COLOR_SCHEME_DECL_RE.test(css)
+  );
+}
 
 interface CssScan {
   varCount: number;
@@ -39,7 +72,7 @@ function scanFoundationsCss(cssPath: string): CssScan | undefined {
     varCount += 1;
     if (/var\(--/.test(m[2])) semanticCount += 1;
   }
-  return { varCount, semanticCount, hasDarkSignal: DARK_SIGNAL_RE.test(content) };
+  return { varCount, semanticCount, hasDarkSignal: hasDarkSignal(content) };
 }
 
 function findDtcgFiles(root: string): string[] {
@@ -107,7 +140,7 @@ export async function checkTokens(system: SystemId, cfg: SystemConfig, dirs: Aud
 
     if (cssScan.hasDarkSignal) {
       score += 15;
-      findings.push({ severity: 'info', message: 'Light/dark theming signal found (prefers-color-scheme or [data-theme]).' });
+      findings.push({ severity: 'info', message: 'Light/dark theming signal found (prefers-color-scheme, a data-*theme/color-scheme attribute, a .dark class selector, or a color-scheme declaration).' });
     } else {
       findings.push({ severity: 'warn', message: 'No light/dark theming signal found in foundationsCss.' });
     }
