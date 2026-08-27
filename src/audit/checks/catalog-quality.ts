@@ -51,11 +51,20 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   let propsWithType = 0;
   let propsWithDefault = 0;
   let propsWithDescription = 0;
+  const zeroPropExportNames: string[] = [];
 
   for (const comp of catalog.components) {
     for (const exp of comp.exports) {
       totalExports += 1;
-      if (exp.props.length > 0) exportsWithProps += 1;
+      if (exp.props.length > 0) {
+        exportsWithProps += 1;
+      } else {
+        zeroPropExportNames.push(exp.displayName);
+      }
+      // The prop-coverage counters below are scoped to non-zero-prop exports
+      // by construction (an empty props array contributes nothing), which is
+      // what makes them a real "of the props we did get" measure once
+      // extraction-suspect kicks in.
       for (const p of exp.props) {
         totalProps += 1;
         if (p.type && p.type.trim() !== '' && p.type.trim().toLowerCase() !== 'unknown') propsWithType += 1;
@@ -69,11 +78,35 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   const pctType = pct(propsWithType, totalProps);
   const pctDefault = pct(propsWithDefault, totalProps);
   const pctDescription = pct(propsWithDescription, totalProps);
+  const pctZeroProp = pct(zeroPropExportNames.length, totalExports);
+  // A docgen extraction that returns 0 props for a component is far more
+  // likely to be an extraction gap (unresolved generics, a re-exported
+  // third-party type, a forwardRef wrapper docgen couldn't see through) than
+  // a genuinely prop-less component (field test: 63% of Mantine's exports
+  // had 0 props, none of it flagged). 30% is a judgment-call threshold for
+  // "enough zero-prop exports that this looks systematic, not incidental".
+  const extractionSuspect = totalExports > 0 && pctZeroProp >= 30;
 
   findings.push({
     severity: 'info',
     message: `${catalog.components.length} component dirs, ${totalExports} exports, ${totalProps} props documented.`,
   });
+
+  if (zeroPropExportNames.length > 0) {
+    findings.push({
+      severity: 'warn',
+      message: `${zeroPropExportNames.length}/${totalExports} exports (${round1(pctZeroProp)}%) have zero documented props: ${zeroPropExportNames.slice(0, 8).join(', ')}${zeroPropExportNames.length > 8 ? ', …' : ''}.`,
+      fix: 'These are more likely docgen extraction gaps (unresolved generics, forwardRef, re-exported third-party types) than genuinely prop-less components. Spot-check a few before trusting the 0.',
+    });
+  }
+  if (extractionSuspect) {
+    findings.push({
+      severity: 'warn',
+      message: `extraction-suspect: ${round1(pctZeroProp)}% of exports have no props. Treat the coverage numbers below as a lower bound.`,
+      fix: 'Type/description/default coverage below is computed only over the exports that did return props; fix extraction and re-run to get a true reading.',
+    });
+  }
+
   if (pctExportsWithProps < 70) {
     findings.push({ severity: 'warn', message: `Only ${round1(pctExportsWithProps)}% of exports have a documented props table.` });
   }
@@ -89,7 +122,9 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   // "has any props at all" are next — 25 each. defaultValue is weighted
   // lowest (15): many required/no-default props are legitimately correct,
   // so 100% default coverage isn't actually the target the way 100% type
-  // coverage is.
+  // coverage is. The formula is deliberately the same above the
+  // extraction-suspect threshold: the loud finding is the correction, the
+  // score still reflects the missing props honestly.
   const score =
     totalExports === 0 ? 0 : pctExportsWithProps * 0.25 + pctType * 0.35 + pctDescription * 0.25 + pctDefault * 0.15;
 

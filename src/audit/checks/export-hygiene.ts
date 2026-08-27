@@ -9,9 +9,15 @@
 //
 // Also reports two smaller, cheap-to-check hygiene signals: whether the
 // components package.json declares a `types`/`typings` field, and whether
-// its declared entry points (main/module/exports["."]) point at a built
-// `dist/` rather than raw `src/` (a package that "works" only inside its own
+// its declared entry points (main/module/exports["."]) point at built output
+// rather than raw `src/` (a package that "works" only inside its own
 // monorepo via source aliasing is not usable by an external agent workspace).
+// "Built output" is deliberately NOT limited to a literal `dist/` folder:
+// real-world builds ship as `esm/`, `cjs/`, `lib/`, or even `./index.js` at
+// package root. The actual signal is "not raw TypeScript source": an entry
+// counts as built output unless it points into a `src/` path segment or is a
+// bare `.ts`/`.tsx` file (a `.d.ts` declaration file is fine, that IS built
+// output, just for types).
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,6 +25,7 @@ import { parse } from '@babel/parser';
 import type { SystemConfig, SystemId } from '../../types.ts';
 import type { AuditCheckResult, AuditDirs, AuditFinding } from '../types.ts';
 import { findPackageDir, readJsonSafe, round1, clamp } from '../util.ts';
+import { expandSpecBases } from '../../extract/normalize.ts';
 
 interface PkgJson {
   name?: string;
@@ -59,7 +66,12 @@ function collectBarrelReachableDirs(barrelPath: string): Set<string> {
   }
   const addSource = (value: unknown) => {
     if (typeof value !== 'string' || !value.startsWith('./')) return;
-    dirs.add(value.slice(2).replace(/\/index$/, ''));
+    // NodeNext barrels write './dir/index.js' or './dir.js' — normalize the
+    // specifier the same way the extract resolvers do before reducing it to
+    // a dir name, so reachability here agrees with what extraction follows.
+    for (const base of expandSpecBases(value)) {
+      dirs.add(base.slice(2).replace(/\/index$/, ''));
+    }
   };
   for (const node of ast.program.body) {
     if (node.type === 'ExportAllDeclaration') {
@@ -73,15 +85,27 @@ function collectBarrelReachableDirs(barrelPath: string): Set<string> {
   return dirs;
 }
 
-/** Single-segment subpath keys from package.json's exports map: "./toggle" -> "toggle". */
-function collectExportsMapDirs(exportsField: Record<string, unknown> | undefined): Set<string> {
+/**
+ * Subpath reachability from package.json's exports map. Literal
+ * single-segment keys ("./toggle" -> "toggle") are collected as dirs; a
+ * wildcard key ("./*", the common real-world form, e.g. Chakra UI's) makes
+ * EVERY subpath importable, so it is reported as wildcardAll rather than
+ * enumerating dirs — treating it as "no dirs" flagged genuinely reachable
+ * directories as unreachable (verified false positive on Chakra's utils/).
+ */
+function collectExportsMapDirs(exportsField: Record<string, unknown> | undefined): { dirs: Set<string>; wildcardAll: boolean } {
   const dirs = new Set<string>();
-  if (!exportsField) return dirs;
+  let wildcardAll = false;
+  if (!exportsField) return { dirs, wildcardAll };
   for (const key of Object.keys(exportsField)) {
+    if (key === './*') {
+      wildcardAll = true;
+      continue;
+    }
     const m = /^\.\/([a-zA-Z0-9-]+)$/.exec(key);
     if (m) dirs.add(m[1]);
   }
-  return dirs;
+  return { dirs, wildcardAll };
 }
 
 /**
@@ -111,8 +135,23 @@ function collectComponentDirsWithIndex(srcDir: string): { candidates: string[]; 
   };
 }
 
-function pointsAtDist(value: string | undefined): boolean {
-  return !!value && /(^|\/)dist\//.test(value);
+/**
+ * True when a declared entry-point value points at built output rather than
+ * raw source. Inverted from a naive "does it say dist/" check on purpose: a
+ * package whose entries point at `esm/`, `cjs/`, or `lib/` is just as
+ * consumable as one pointing at `dist/`, and a naive `/dist\//` test flags
+ * those as failures (verified false positive on Mantine, which ships from
+ * `esm/`). The signal actually wanted is "consumable outside the monorepo",
+ * so anything is built output UNLESS it points into a `src/` path segment or
+ * is a raw `.ts`/`.tsx` file. `.d.ts` does not count as raw source: it's a
+ * build artifact like any other.
+ */
+function pointsAtBuiltOutput(value: string | undefined): boolean {
+  if (!value) return false;
+  if (/(^|\/)src\//.test(value)) return false;
+  if (/\.d\.ts$/i.test(value)) return true;
+  if (/\.tsx?$/i.test(value)) return false;
+  return true;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- dirs unused: this check reads componentsSrc/package.json directly, no catalog needed; kept for AuditCheckFn conformance.
@@ -125,7 +164,7 @@ export async function checkExportHygiene(system: SystemId, cfg: SystemConfig, di
   const barrelDirs = collectBarrelReachableDirs(barrelPath);
   const pkgDir = findPackageDir(srcDir, root);
   const pkg = pkgDir ? readJsonSafe<PkgJson>(join(pkgDir, 'package.json')) : undefined;
-  const exportsMapDirs = collectExportsMapDirs(pkg?.exports);
+  const { dirs: exportsMapDirs, wildcardAll: exportsWildcardAll } = collectExportsMapDirs(pkg?.exports);
   const { candidates: componentDirs, encapsulated } = collectComponentDirsWithIndex(srcDir);
   for (const dir of encapsulated) {
     findings.push({ severity: 'info', message: `${dir}/ has its own index.ts but is treated as intentionally non-public (conventional name) and excluded from reachability.` });
@@ -138,7 +177,12 @@ export async function checkExportHygiene(system: SystemId, cfg: SystemConfig, di
     findings.push({ severity: 'warn', message: `Could not locate the components package.json above ${cfg.componentsSrc}.` });
   }
 
-  const unreachable = componentDirs.filter((d) => !barrelDirs.has(d) && !exportsMapDirs.has(d));
+  const unreachable = exportsWildcardAll
+    ? []
+    : componentDirs.filter((d) => !barrelDirs.has(d) && !exportsMapDirs.has(d));
+  if (exportsWildcardAll) {
+    findings.push({ severity: 'info', message: 'exports map declares a "./*" wildcard: every subpath is importable, so all component dirs count as reachable.' });
+  }
   for (const dir of unreachable) {
     findings.push({
       severity: 'fail',
@@ -155,14 +199,32 @@ export async function checkExportHygiene(system: SystemId, cfg: SystemConfig, di
     findings.push({ severity: 'warn', message: 'package.json has no "types"/"typings" field.', fix: 'Declare "types" so TypeScript-aware agent tooling can resolve prop types without a docgen catalog.' });
   }
 
-  const distDeclared =
-    pointsAtDist(pkg?.main) || pointsAtDist(pkg?.module) || pointsAtDist(pkg?.exports?.['.'] as string | undefined);
+  const entryPoints: Array<{ key: string; value: string | undefined }> = [
+    { key: 'main', value: pkg?.main },
+    { key: 'module', value: pkg?.module },
+    { key: 'exports["."]', value: pkg?.exports?.['.'] as string | undefined },
+  ];
+  const declaredEntryPoints = entryPoints.filter((e): e is { key: string; value: string } => typeof e.value === 'string');
+  const rawSourceEntryPoints = declaredEntryPoints.filter((e) => !pointsAtBuiltOutput(e.value));
+  const distDeclared = declaredEntryPoints.some((e) => pointsAtBuiltOutput(e.value));
+
   if (!distDeclared) {
-    findings.push({
-      severity: 'info',
-      message: 'No declared entry point (main/module/exports["."]) points at a built dist/ path.',
-      fix: 'A package usable outside its own monorepo (by an external agent workspace via npm install) needs a built dist entry, not source-aliased paths.',
-    });
+    if (rawSourceEntryPoints.length > 0) {
+      // Entries ARE declared, they just point at raw source: name them so
+      // the fix is obvious instead of a generic "no dist" message.
+      findings.push({
+        severity: 'info',
+        message: `Entry points target raw source, not built output: ${rawSourceEntryPoints.map((e) => `${e.key}="${e.value}"`).join(', ')}.`,
+        fix: 'A package usable outside its own monorepo (by an external agent workspace via npm install) needs a built entry (dist/, esm/, cjs/, lib/, …), not a source-aliased .ts/.tsx path.',
+      });
+    } else {
+      // No entries declared at all.
+      findings.push({
+        severity: 'info',
+        message: 'No declared entry point (main/module/exports["."]) points at built output.',
+        fix: 'A package usable outside its own monorepo (by an external agent workspace via npm install) needs a built dist entry, not source-aliased paths.',
+      });
+    }
   }
 
   if (componentDirs.length === 0) {

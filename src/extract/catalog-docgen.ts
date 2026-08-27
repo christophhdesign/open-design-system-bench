@@ -16,15 +16,32 @@
 // A barrel target may also be a bare .tsx file module rather than a directory
 // (e.g. `export * from './components/Icon/Icon.Skeleton'`) — those are
 // docgen-parsed directly.
+//
+// Monorepos (Chakra UI, Mantine, ...) add two wrinkles: the root barrel is
+// often itself a barrel-of-barrels (`export * from './components'`, where
+// `components/index.ts` re-exports each real component directory) — followed
+// recursively rather than treated as one dir — and specifiers sometimes carry
+// NodeNext-style `.js`/`.jsx` extensions that have to map back to `.ts(x)`
+// source. A re-export that resolves outside componentsSrc but still inside
+// the system root (a component living in a sibling package/dir) is followed
+// rather than silently dropped.
 
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parse } from '@babel/parser';
 import type { ExportSpecifier } from '@babel/types';
 import { withCustomConfig } from 'react-docgen-typescript';
 import type { ComponentDoc, ParserOptions, PropItem } from 'react-docgen-typescript';
 import type { CatalogExport, CatalogProp, SystemCatalog, SystemConfig, SystemId } from '../types.ts';
-import { buildIndexes, collectBarrelExports, gitCommit, hashPaths, mergeBarrelExports } from './normalize.ts';
+import {
+  buildIndexes,
+  collectBarrelExports,
+  expandSpecBases,
+  gitCommit,
+  hashPaths,
+  mergeBarrelExports,
+  resolveTsconfigUpward,
+} from './normalize.ts';
 
 function parseModule(code: string) {
   // 'jsx' matters: barrel targets can be implementation .tsx files, not just
@@ -42,34 +59,148 @@ interface BarrelDirEntry {
   explicitNames?: string[];
 }
 
+/** True when `absPath` is inside (or equal to) `root` — the boundary a followed re-export must stay within. */
+function isInsideRoot(root: string, absPath: string): boolean {
+  const rel = relative(resolve(root), resolve(absPath));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+interface ReexportTarget {
+  path: string;
+  /** true when the barrel entry names a bare module file (`./utils/cx`, `./Icon/Icon.Skeleton`) rather than a directory. */
+  isFileModule: boolean;
+}
+
 /**
- * Every directory (or file module) the public barrel re-exports from,
- * de-duplicated, in first-seen order. Follows both `export * from './dir'`
- * and named value re-exports (`export { X } from './dir'`). When one dir is
- * named by both forms, the `export *` wins (its module's export list is a
- * superset of any explicit specifier list).
+ * Resolves what `export ... from '<spec>'` actually points at, relative to
+ * `baseDir` (the directory containing the file doing the exporting). Usually
+ * `<spec>/index.ts(x)`, but barrel entries can also name a bare module file
+ * directly rather than a directory. `spec` is the raw specifier
+ * (`./components`, `./components/index.js`, `./Icon/Icon.Skeleton`) —
+ * expandSpecBases handles NodeNext-style `.js`/`.jsx`/`.mjs` extensions
+ * before candidate expansion.
  */
-function collectBarrelDirs(barrelPath: string): BarrelDirEntry[] {
+function resolveReexportTarget(baseDir: string, spec: string): ReexportTarget | undefined {
+  for (const base of expandSpecBases(spec)) {
+    const abs = join(baseDir, base);
+    const candidates: ReexportTarget[] = [
+      { path: join(abs, 'index.ts'), isFileModule: false },
+      { path: join(abs, 'index.tsx'), isFileModule: false },
+      { path: join(abs, 'index.mts'), isFileModule: false },
+      { path: `${abs}.ts`, isFileModule: true },
+      { path: `${abs}.tsx`, isFileModule: true },
+      { path: `${abs}.mts`, isFileModule: true },
+    ];
+    for (const candidate of candidates) {
+      try {
+        readFileSync(candidate.path);
+        return candidate;
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+  // Literal fallback: a genuine compiled .js/.jsx file checked into source,
+  // rather than assuming every .js-suffixed specifier maps to a .ts(x) source.
+  const literal = join(baseDir, spec);
+  try {
+    readFileSync(literal);
+    return { path: literal, isFileModule: true };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when `moduleFile`'s own top-level `export * from` targets resolve to
+ * further directories rather than a sibling implementation file — i.e. it is
+ * itself a pure barrel-of-barrels (e.g. a `components/index.ts` re-exporting
+ * `./button`, `./accordion`, ...) rather than one component directory's own
+ * index (`Alpha/index.ts` re-exporting its sibling `./Alpha` implementation
+ * file). Determines whether collectBarrelDirs should recurse into it for
+ * further dirs, or treat it as a single leaf component directory.
+ */
+function isBarrelOfDirs(moduleFile: string, root: string): boolean {
+  const ast = parseModule(readFileSync(moduleFile, 'utf8'));
+  const baseDir = dirname(moduleFile);
+  for (const node of ast.program.body) {
+    if (node.type !== 'ExportAllDeclaration') continue;
+    if (typeof node.source.value !== 'string' || !node.source.value.startsWith('.')) continue;
+    const target = resolveReexportTarget(baseDir, node.source.value);
+    if (target && !target.isFileModule && isInsideRoot(root, target.path)) return true;
+  }
+  return false;
+}
+
+/** Strips a leading './' for display purposes — used only as a last-resort dir name when a barrel entry can't be resolved on disk (see collectBarrelDirs). */
+function stripLeadingDotSlash(spec: string): string {
+  return spec.startsWith('./') ? spec.slice(2) : spec;
+}
+
+/**
+ * Every directory (or file module) the public barrel makes reachable,
+ * de-duplicated by resolved location, in first-seen order. Follows both
+ * `export * from './dir'` and named value re-exports
+ * (`export { X } from './dir'`). Barrels commonly nest — a root `index.ts`
+ * doing `export * from './components'` where `components/index.ts` then
+ * re-exports each per-component directory — so `export *` chains are
+ * followed recursively (isBarrelOfDirs decides, at each hop, whether the
+ * target is a further barrel-of-dirs to recurse into or a leaf component
+ * directory to record), with a visited-set cycle guard. When one dir is
+ * named by both forms, the `export *` wins (its module's export list is a
+ * superset of any explicit specifier list). A resolved target outside `root`
+ * entirely is not followed (mirrors how a non-relative/external specifier is
+ * never followed); a target outside `srcDir` but still inside `root` *is*
+ * followed — silently dropping it is exactly the Mantine `Box` field-test bug
+ * this exists to fix.
+ */
+function collectBarrelDirs(
+  barrelPath: string,
+  srcDir: string,
+  root: string,
+  visited: Set<string> = new Set(),
+): BarrelDirEntry[] {
+  if (visited.has(barrelPath)) return [];
+  visited.add(barrelPath);
+
   const ast = parseModule(readFileSync(barrelPath, 'utf8'));
+  const baseDir = dirname(barrelPath);
   const byDir = new Map<string, BarrelDirEntry>();
 
-  const add = (source: string, explicitNames?: string[]) => {
-    const dir = source.startsWith('./') ? source.slice(2) : source;
-    const existing = byDir.get(dir);
+  const add = (entry: BarrelDirEntry) => {
+    const existing = byDir.get(entry.dir);
     if (!existing) {
-      byDir.set(dir, explicitNames ? { dir, explicitNames: [...explicitNames] } : { dir });
+      byDir.set(entry.dir, entry);
       return;
     }
     if (!existing.explicitNames) return; // export * already governs this dir
-    if (explicitNames) existing.explicitNames.push(...explicitNames);
+    if (entry.explicitNames) existing.explicitNames.push(...entry.explicitNames);
     else existing.explicitNames = undefined; // export * broadens to the module's own export list
   };
 
+  // dir string relative to srcDir for a resolved target — may start with
+  // '../' when the target lives outside srcDir but inside root.
+  const dirFor = (target: ReexportTarget): string =>
+    target.isFileModule ? relative(srcDir, target.path.replace(/\.(tsx|ts|mts)$/, '')) : relative(srcDir, dirname(target.path));
+
   for (const node of ast.program.body) {
     if (node.type === 'ExportAllDeclaration') {
-      if (typeof node.source.value === 'string') add(node.source.value);
+      if (typeof node.source.value !== 'string' || !node.source.value.startsWith('.')) continue;
+      const target = resolveReexportTarget(baseDir, node.source.value);
+      if (!target) {
+        console.warn(`[extract] could not resolve re-export target '${node.source.value}' from ${barrelPath} — skipping`);
+        continue;
+      }
+      if (!isInsideRoot(root, target.path)) continue; // stay inside the system root
+
+      if (!target.isFileModule && isBarrelOfDirs(target.path, root)) {
+        for (const nested of collectBarrelDirs(target.path, srcDir, root, visited)) add(nested);
+        continue;
+      }
+      add({ dir: dirFor(target) });
       continue;
     }
+
     if (node.type !== 'ExportNamedDeclaration' || !node.source) continue;
     if (typeof node.source.value !== 'string' || !node.source.value.startsWith('.')) continue;
     if (node.exportKind === 'type') continue; // whole `export type { ... } from` block
@@ -81,38 +212,18 @@ function collectBarrelDirs(barrelPath: string): BarrelDirEntry[] {
       const exportedName = s.exported.type === 'Identifier' ? s.exported.name : s.exported.value;
       if (/^[A-Z]/.test(exportedName)) names.push(exportedName);
     }
-    if (names.length > 0) add(node.source.value, names);
+    if (names.length === 0) continue;
+    const target = resolveReexportTarget(baseDir, node.source.value);
+    if (target && !isInsideRoot(root, target.path)) continue; // resolved but outside the system root — don't follow
+
+    // Even when the target can't be found on disk, the barrel's own naming
+    // is used as a best-effort dir key — the specifier list is authoritative
+    // regardless of whether docgen will later find any .tsx files there.
+    const dir = target ? dirFor(target) : stripLeadingDotSlash(node.source.value);
+    add({ dir, explicitNames: names });
   }
+
   return [...byDir.values()];
-}
-
-interface ReexportTarget {
-  path: string;
-  /** true when the barrel entry names a bare module file (`./utils/cx`, `./Icon/Icon.Skeleton`) rather than a directory. */
-  isFileModule: boolean;
-}
-
-/**
- * Resolves what `export ... from './<dir>'` actually points at. Usually
- * `<dir>/index.ts(x)`, but barrel entries can also name a bare module file
- * directly rather than a directory.
- */
-function resolveReexportTarget(srcDir: string, dir: string): ReexportTarget | undefined {
-  const candidates: ReexportTarget[] = [
-    { path: join(srcDir, dir, 'index.ts'), isFileModule: false },
-    { path: join(srcDir, dir, 'index.tsx'), isFileModule: false },
-    { path: join(srcDir, `${dir}.ts`), isFileModule: true },
-    { path: join(srcDir, `${dir}.tsx`), isFileModule: true },
-  ];
-  for (const candidate of candidates) {
-    try {
-      readFileSync(candidate.path);
-      return candidate;
-    } catch {
-      // try next candidate
-    }
-  }
-  return undefined;
 }
 
 /**
@@ -121,10 +232,24 @@ function resolveReexportTarget(srcDir: string, dir: string): ReexportTarget | un
  * `export const/function/class` declarations (file modules like an
  * `Icon.Skeleton.tsx` declare their component inline).
  */
-function collectPublicComponentNames(moduleFile: string): string[] {
+function collectPublicComponentNames(moduleFile: string, visited: Set<string> = new Set()): string[] {
+  if (visited.has(moduleFile)) return [];
+  visited.add(moduleFile);
+
   const ast = parseModule(readFileSync(moduleFile, 'utf8'));
+  const baseDir = dirname(moduleFile);
   const names: string[] = [];
   for (const node of ast.program.body) {
+    if (node.type === 'ExportAllDeclaration') {
+      // A dir's own index sometimes re-exports its sibling implementation
+      // file wholesale (`export * from './Alpha'`) instead of naming
+      // components explicitly — follow it (with a cycle guard) to reach the
+      // inline declarations, same as collectBarrelExports does for allExports.
+      if (typeof node.source.value !== 'string' || !node.source.value.startsWith('.')) continue;
+      const target = resolveReexportTarget(baseDir, node.source.value);
+      if (target) names.push(...collectPublicComponentNames(target.path, visited));
+      continue;
+    }
     if (node.type !== 'ExportNamedDeclaration') continue;
     if (node.exportKind === 'type') continue; // whole `export type { ... }` block
     if (node.declaration) {
@@ -228,7 +353,7 @@ const parserOptions: ParserOptions = {
 export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig): Promise<SystemCatalog> {
   const srcDir = join(cfg.root, cfg.componentsSrc);
   const barrelPath = join(srcDir, 'index.ts');
-  const barrelDirs = collectBarrelDirs(barrelPath);
+  const barrelDirs = collectBarrelDirs(barrelPath, srcDir, cfg.root);
 
   // dir -> ordered list of its public (PascalCase, value-exported) names.
   const dirToNames = new Map<string, string[]>();
@@ -269,7 +394,7 @@ export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig):
     packageOnlySubpathIndexFiles.push(target.path);
   }
 
-  const tsconfigPath = join(dirname(srcDir), 'tsconfig.json');
+  const tsconfigPath = resolveTsconfigUpward(srcDir, cfg.root);
   const docgenParser = withCustomConfig(tsconfigPath, parserOptions);
 
   const components: SystemCatalog['components'] = [];

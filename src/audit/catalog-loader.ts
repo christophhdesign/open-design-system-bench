@@ -24,10 +24,11 @@
 // catalog" rather than throwing — audit checks must never crash a run.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { catalogPath } from '../config.ts';
 import type { SystemCatalog, SystemConfig, SystemId } from '../types.ts';
 import { extractCatalogJsonCatalog } from '../extract/catalog-json.ts';
+import { findTsconfigUpward } from '../extract/normalize.ts';
 import { walkFiles } from './fs-walk.ts';
 
 export type CatalogSource = 'pre-extracted' | 'catalog-json-live' | 'none-catalog-json' | 'none-docgen';
@@ -79,12 +80,14 @@ export async function loadCatalogForAudit(
 
   // docgen strategy, no snapshot available.
   const srcDir = join(cfg.root, cfg.componentsSrc);
-  const tsconfigPath = join(dirname(srcDir), 'tsconfig.json');
   return {
     catalog: null,
     source: 'none-docgen',
     docgenPreconditions: {
-      tsconfigExists: existsSync(tsconfigPath),
+      // Monorepos keep tsconfig.json at the package or repo root rather than
+      // exactly one level above componentsSrc — search upward through root
+      // so partial credit doesn't zero out on those layouts.
+      tsconfigExists: findTsconfigUpward(srcDir, cfg.root) !== undefined,
       tsxComponentCount: countTsxComponentFiles(srcDir),
     },
   };

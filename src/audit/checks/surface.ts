@@ -21,15 +21,23 @@
 //   (sum = 100)
 // Freshness is not folded into the weighted sum above (a missing doc already
 // scores 0 on presence; there's nothing to further penalize). Instead it's a
-// capped +/-5 adjustment applied only when at least one of AGENTS.md/CLAUDE.md/
-// llms.txt exists, comparing the newest of those doc mtimes against the
-// newest component-source mtime under componentsSrc.
+// +5 bonus only (staleness earns a warn finding, never a score penalty),
+// applied only when at least one of AGENTS.md/CLAUDE.md/llms.txt exists,
+// comparing the newest of those docs' git commit times against the newest
+// git commit time touching componentsSrc. This is git-commit-time based, not
+// filesystem-mtime based: on a fresh clone every file's mtime is the
+// checkout time, which makes an mtime comparison meaningless (it always
+// looks "fresh" or "stale" based on write order during checkout, not actual
+// history). When git is unavailable, the root isn't a git work tree, or any
+// needed commit time can't be resolved, freshness is reported as unmeasured
+// rather than guessed from mtime.
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import type { SystemConfig, SystemId } from '../../types.ts';
 import type { AuditCheckResult, AuditDirs, AuditFinding } from '../types.ts';
-import { walkFiles, newestMtime } from '../fs-walk.ts';
+import { walkFiles } from '../fs-walk.ts';
 import { readJsonSafe, clamp, round1, findPackageDir } from '../util.ts';
 import { loadCatalogForAudit } from '../catalog-loader.ts';
 
@@ -66,6 +74,24 @@ function hasRegistryHint(root: string, componentsPkgDir: string, pkg: PkgJson | 
   if (pkg?.publishConfig?.registry) return true;
   if (pkg?.exports && Object.keys(pkg.exports).some((k) => k.includes('registry'))) return true;
   return false;
+}
+
+/**
+ * Newest commit time (unix seconds, `git log`'s `%ct`) touching `relPath`
+ * under `root`, or undefined if it can't be determined: git isn't
+ * installed, `root` isn't a git work tree, the command otherwise fails, or
+ * it succeeds but returns no history for that path (e.g. an untracked
+ * file). A single `git log -1` per path is O(1) regardless of path type:
+ * for a directory this is the newest commit touching anything under it, so
+ * callers should pass a directory once rather than looping per file inside it.
+ */
+function getGitCommitTime(root: string, relPath: string): number | undefined {
+  const result = spawnSync('git', ['-C', root, 'log', '-1', '--format=%ct', '--', relPath], { encoding: 'utf8' });
+  if (result.error || result.status !== 0) return undefined;
+  const out = result.stdout.trim();
+  if (!out) return undefined;
+  const n = Number(out);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function hasSkillDirs(root: string, cfg: SystemConfig): { present: boolean; configuredMissing: string[] } {
@@ -191,22 +217,25 @@ export async function checkSurface(system: SystemId, cfg: SystemConfig, dirs: Au
     findings.push({ severity: 'info', message: 'No registry hint found (registry.json, publishConfig.registry).' });
   }
 
-  // --- freshness bonus/penalty (+/-5, only when a doc exists to compare) ---
-  const docMtimes = [hasAgentsMd && statSync(agentsMdPath).mtimeMs, hasClaudeMd && statSync(claudeMdPath).mtimeMs, hasLlmsTxt && statSync(llmsTxtPath).mtimeMs].filter(
-    (v): v is number => typeof v === 'number',
+  // --- freshness bonus (+5 only, git-commit-time based; only when a doc exists to compare) ---
+  const docRelPaths = [hasAgentsMd && 'AGENTS.md', hasClaudeMd && 'CLAUDE.md', hasLlmsTxt && 'llms.txt'].filter(
+    (v): v is string => typeof v === 'string',
   );
-  if (docMtimes.length > 0) {
-    const newestDoc = Math.max(...docMtimes);
-    const sourceFiles = walkFiles(join(root, cfg.componentsSrc), { extensions: ['.ts', '.tsx', '.css'] });
-    const newestSource = newestMtime(sourceFiles);
-    if (newestSource !== undefined) {
-      if (newestDoc >= newestSource) {
+  if (docRelPaths.length > 0) {
+    const docCommitTimes = docRelPaths.map((p) => getGitCommitTime(root, p));
+    const sourceCommitTime = getGitCommitTime(root, cfg.componentsSrc);
+    const measured = sourceCommitTime !== undefined && docCommitTimes.every((v): v is number => v !== undefined);
+    if (!measured) {
+      findings.push({ severity: 'info', message: 'Doc freshness unmeasured (not a git checkout).' });
+    } else {
+      const newestDoc = Math.max(...docCommitTimes);
+      if (newestDoc >= sourceCommitTime) {
         score = clamp(score + 5, 0, 100);
-        findings.push({ severity: 'info', message: 'Enablement docs are as new as or newer than the newest component source change.' });
+        findings.push({ severity: 'info', message: 'Enablement docs are as new as or newer than the newest component source change (git history).' });
       } else {
         findings.push({
           severity: 'warn',
-          message: 'Enablement docs (AGENTS.md/CLAUDE.md/llms.txt) predate the newest component source change, so they may be stale.',
+          message: 'Enablement docs (AGENTS.md/CLAUDE.md/llms.txt) predate the newest component source change (git history), so they may be stale.',
           fix: 'Re-check AGENTS.md/llms.txt after component API changes; agents will confidently cite the stale version.',
         });
       }

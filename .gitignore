@@ -30,9 +30,9 @@ examples/oss/repos/
 # marketing-docs/ pre-approval launch material (blog post, case study, one-pager,
 #                 social drafts), pending the P3 legal and trademark review.
 #
-# NOTE: ignoring these does NOT remove third-party names from the repo. They also
-# appear in README.md, AGENTS.md, ROADMAP.md, and several src/ files. See the
-# "leftover references" note in AGENTS.md before publishing.
+# NOTE: the tracked tree is clean of these names apart from the Nexos gateway
+# example in .env.example (a public endpoint, kept deliberately). Sweep with
+# `git grep -i` before re-adding anything from these ignored directories.
 examples/
 marketing-docs/
 

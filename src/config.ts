@@ -70,9 +70,10 @@ export function loadSystems(configPath: string = paths.systemsConfig): SystemsCo
 /**
  * Where catalogs/ and tokens/ live for a given systems config: the package's
  * top-level generated-output dirs by default, or `<dataDir>/catalogs` and
- * `<dataDir>/tokens` (relative to the config file) when the config declares
- * a `dataDir` — lets an example ship its catalogs/tokens as
- * committed snapshots instead of requiring a live `extract` run.
+ * `<dataDir>/tokens` when the config declares a `dataDir` (resolved against
+ * the config file's directory; an absolute dataDir is used as-is) — lets an
+ * example ship its catalogs/tokens as committed snapshots instead of
+ * requiring a live `extract` run.
  */
 export function resolveDataDirs(configPath: string = paths.systemsConfig): { catalogsDir: string; tokensDir: string } {
   if (!existsSync(configPath)) {
@@ -86,8 +87,8 @@ export function resolveDataDirs(configPath: string = paths.systemsConfig): { cat
     return { catalogsDir: paths.catalogsDir, tokensDir: paths.tokensDir };
   }
   if (!dataDir) return { catalogsDir: paths.catalogsDir, tokensDir: paths.tokensDir };
-  const base = dirname(configPath);
-  return { catalogsDir: join(base, dataDir, 'catalogs'), tokensDir: join(base, dataDir, 'tokens') };
+  const base = resolve(dirname(configPath), dataDir);
+  return { catalogsDir: join(base, 'catalogs'), tokensDir: join(base, 'tokens') };
 }
 
 export function loadBenchConfig(): BenchConfig {

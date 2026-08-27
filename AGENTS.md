@@ -16,7 +16,7 @@ source and is not part of the shipped repo.
   default resolves from the user's own `systems.config.json`. If you find yourself hardcoding a
   component name, package name, or provider id, make it a config field instead.
 
-## What exists and works (verified 2026-08-25, 118/118 tests)
+## What exists and works (verified 2026-08-27, full test suite green)
 
 - **Fully system-agnostic.** Systems are arbitrary string ids declared in
   `systems.config.json` (`{ "systems": { "<id>": SystemConfig } }`). The root config ships a
@@ -63,7 +63,7 @@ source and is not part of the shipped repo.
   `--cache .npm-cache --no-fund --no-audit` (dir is gitignored).
 - Verification loop after any change:
   `node_modules/.bin/tsc --noEmit -p tsconfig.json` and
-  `node_modules/.bin/tsx --test src/**/*.test.ts` (104 tests green as of this writing), plus
+  `node_modules/.bin/tsx --test src/**/*.test.ts` (the whole suite stays green), plus
   `npx tsx src/cli.ts validate-tasks` and, when audit code changed,
   `npx tsx src/cli.ts audit` against a configured system.
 - Benchmark runs (`run`, `judge`, doctor's live probe) cost real LLM money — never start one

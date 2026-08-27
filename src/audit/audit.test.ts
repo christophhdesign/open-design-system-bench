@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +13,9 @@ import { computeAuditScore } from './score.ts';
 import { checkExportHygiene } from './checks/export-hygiene.ts';
 import { checkVocabulary } from './checks/vocabulary.ts';
 import { checkSurface } from './checks/surface.ts';
+import { hasDarkSignal } from './checks/tokens.ts';
+import { checkDocsGreppability } from './checks/docs-greppability.ts';
+import { checkCatalogQuality } from './checks/catalog-quality.ts';
 
 function writeFile(path: string, content: string): void {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -321,6 +325,424 @@ test('score assembly computes Lift/Ceiling/Engagement/Vocabulary-behavioral from
     assert.ok(score.engagement.score !== null && score.engagement.score < 100); // 1/3 ok cells ignored the system
     assert.equal(score.vocabularyBehavioral.score, 0); // the one hallucination ("Switch") is a lexicon-exact match
     assert.ok(['Emerging', 'Invested', 'AI-native'].includes(score.tier));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Field-test fixes: export-hygiene dist/ heuristic, tokens dark-signal
+// regex, docs-greppability compound names + fallback cap, surface git-based
+// freshness, catalog-quality zero-prop findings.
+// ---------------------------------------------------------------------------
+
+test('export-hygiene treats esm/cjs/lib (and bare index.js) build outputs as built output, not just dist/', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-builtoutput-'));
+  const system = 'builtoutputkit';
+  try {
+    // No "dist/" anywhere on purpose: main points at esm/, exports["."] at
+    // cjs/, the exact shape that used to false-positive as "no dist entry".
+    writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: '@builtoutputkit/components',
+        main: './esm/index.mjs',
+        types: './esm/index.d.ts',
+        exports: { '.': './cjs/index.cjs' },
+      }),
+    );
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_BUILTOUTPUTKIT_DIR',
+      componentsSrc: 'src', // does not exist; package.json lives at root
+      componentsPkg: '@builtoutputkit/components',
+      foundationsPkg: '@builtoutputkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkExportHygiene(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    assert.ok(
+      !result.findings.some((f) => f.message.includes('raw source')),
+      `esm/cjs entries must not be flagged as raw source, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('export-hygiene flags entries that point at raw src/ or .ts/.tsx, naming the offending values', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-rawsrc-'));
+  const system = 'rawsrckit';
+  try {
+    writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({ name: '@rawsrckit/components', main: './src/index.ts', types: './dist/index.d.ts' }),
+    );
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_RAWSRCKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@rawsrckit/components',
+      foundationsPkg: '@rawsrckit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkExportHygiene(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    const rawSourceFinding = result.findings.find((f) => f.message.includes('raw source'));
+    assert.ok(rawSourceFinding, `expected a raw-source finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(
+      rawSourceFinding!.message.includes('main="./src/index.ts"'),
+      `finding should name the offending value, got: ${rawSourceFinding!.message}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('tokens.hasDarkSignal matches prefers-color-scheme, data-*theme/color-scheme attributes, .dark selectors, and color-scheme declarations', () => {
+  const positive = [
+    '[data-mantine-color-scheme="dark"] { --x: 1; }',
+    '[data-theme="dark"] { --x: 1; }',
+    '@media (prefers-color-scheme: dark) { :root { --x: 1; } }',
+    '.dark {\n  --x: 1;\n}',
+    'html.dark .x { --x: 1; }',
+    'color-scheme: light dark;',
+  ];
+  for (const css of positive) {
+    assert.ok(hasDarkSignal(css), `expected a dark signal in: ${css}`);
+  }
+
+  const negative = ['.darker {\n  --x: 1;\n}', '--dark-shadow: 1px 1px 0 black;', '/* dark magic happens here */'];
+  for (const css of negative) {
+    assert.ok(!hasDarkSignal(css), `did not expect a dark signal in: ${css}`);
+  }
+});
+
+test('docs-greppability matches dotted compound names (Accordion.ItemBody) against flattened catalog export names', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-dotted-'));
+  const system = 'dottedkit';
+  try {
+    writeFile(join(root, 'docs/accordion.md'), '# Accordion\n\nUse `Accordion.ItemBody` for the collapsible body content.\n');
+
+    const catalogsDir = join(root, '.audit-data', 'catalogs');
+    mkdirSync(catalogsDir, { recursive: true });
+    const catalog: SystemCatalog = {
+      system,
+      generatedAt: new Date().toISOString(),
+      source: { root, commit: 'test', srcHash: 'test' },
+      components: [
+        {
+          dir: 'accordion',
+          exports: [
+            { displayName: 'Accordion', description: 'Root.', props: [] },
+            { displayName: 'AccordionItemBody', description: 'Body.', props: [] },
+          ],
+        },
+      ],
+      allExports: ['Accordion', 'AccordionItemBody'],
+      allPropsByExport: {},
+    };
+    writeFileSync(catalogPath(system, catalogsDir), JSON.stringify(catalog, null, 2));
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_DOTTEDKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@dottedkit/components',
+      foundationsPkg: '@dottedkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkDocsGreppability(system, cfg, { catalogsDir, tokensDir: join(root, 'tokens') });
+    const coverageFinding = result.findings.find((f) => f.message.includes('mentioned in at least one markdown file'));
+    assert.ok(coverageFinding, `expected a coverage finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(
+      coverageFinding!.message.startsWith('2/2'),
+      `expected both exports covered (direct + dotted-variant match), got: ${coverageFinding!.message}`,
+    );
+    assert.ok(
+      !result.findings.some((f) => f.message.includes('AccordionItemBody') && f.severity === 'warn'),
+      'AccordionItemBody must not be reported as uncovered once its dotted form is found',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('docs-greppability fallback mode (no catalog) is capped at 40 and labeled not comparable to coverage mode', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-fallback-'));
+  const system = 'fallbackkit';
+  try {
+    // Plenty of markdown, but no catalog anywhere (docgen strategy, no
+    // tsconfig, no .tsx files): this must NOT be able to out-score a real
+    // measured-coverage result.
+    for (let i = 0; i < 25; i++) {
+      writeFile(join(root, `docs/file-${i}.md`), `# Doc ${i}\n`);
+    }
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_FALLBACKKIT_DIR',
+      componentsSrc: 'src', // does not exist
+      componentsPkg: '@fallbackkit/components',
+      foundationsPkg: '@fallbackkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const catalogsDir = join(root, 'catalogs'); // does not exist
+    const result = await checkDocsGreppability(system, cfg, { catalogsDir, tokensDir: join(root, 'tokens') });
+    assert.equal(result.score, 40, `expected the fallback cap of 40 at >=20 markdown files, got ${result.score}`);
+    assert.ok(
+      result.findings.some((f) => f.message.includes('capped at 40') && f.message.includes('not comparable')),
+      `expected a cap/mode-comparability finding, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function initGitRepo(root: string): void {
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 'audit-test@example.com'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 'Audit Test'], { cwd: root });
+}
+
+function gitCommitAll(root: string, message: string, isoDate: string): void {
+  execFileSync('git', ['add', '-A'], { cwd: root });
+  execFileSync('git', ['commit', '-q', '-m', message], {
+    cwd: root,
+    env: { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate },
+  });
+}
+
+test('surface freshness uses git commit history: fresh docs earn +5, stale docs get a warn with no bonus', async () => {
+  function buildFreshnessRepo(order: 'docs-after-source' | 'docs-before-source'): { root: string; cfg: SystemConfig } {
+    const root = mkdtempSync(join(tmpdir(), `open-design-system-bench-audit-freshness-${order}-`));
+    initGitRepo(root);
+    const writeSource = () => writeFile(join(root, 'packages/components/src/toggle/index.ts'), 'export function Toggle() { return null; }\n');
+    const writeDocs = () => writeFile(join(root, 'AGENTS.md'), '# Freshkit agent guide\n');
+
+    if (order === 'docs-after-source') {
+      writeSource();
+      gitCommitAll(root, 'add source', '2024-01-01T00:00:00Z');
+      writeDocs();
+      gitCommitAll(root, 'add docs', '2024-06-01T00:00:00Z');
+    } else {
+      writeDocs();
+      gitCommitAll(root, 'add docs', '2024-01-01T00:00:00Z');
+      writeSource();
+      gitCommitAll(root, 'update source', '2024-06-01T00:00:00Z');
+    }
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_FRESHKIT_DIR',
+      componentsSrc: 'packages/components/src',
+      componentsPkg: '@freshkit/components',
+      foundationsPkg: '@freshkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    return { root, cfg };
+  }
+
+  const fresh = buildFreshnessRepo('docs-after-source');
+  const stale = buildFreshnessRepo('docs-before-source');
+  try {
+    const freshResult = await checkSurface('freshkit', fresh.cfg, { catalogsDir: join(fresh.root, 'c'), tokensDir: join(fresh.root, 't') });
+    const staleResult = await checkSurface('freshkit', stale.cfg, { catalogsDir: join(stale.root, 'c'), tokensDir: join(stale.root, 't') });
+
+    assert.ok(
+      freshResult.findings.some((f) => f.severity === 'info' && f.message.includes('as new as or newer') && f.message.includes('git history')),
+      `expected a fresh-docs info finding, got: ${JSON.stringify(freshResult.findings)}`,
+    );
+    assert.ok(
+      staleResult.findings.some((f) => f.severity === 'warn' && f.message.includes('predate') && f.message.includes('git history')),
+      `expected a stale-docs warn finding, got: ${JSON.stringify(staleResult.findings)}`,
+    );
+    assert.ok(!staleResult.findings.some((f) => f.message.includes('as new as or newer')), 'stale case must not also claim freshness');
+
+    assert.equal(typeof freshResult.score, 'number');
+    assert.equal(typeof staleResult.score, 'number');
+    assert.equal(
+      (freshResult.score as number) - (staleResult.score as number),
+      5,
+      'the only difference between the two repos is commit order, so the freshness bonus should be exactly +5',
+    );
+  } finally {
+    rmSync(fresh.root, { recursive: true, force: true });
+    rmSync(stale.root, { recursive: true, force: true });
+  }
+});
+
+test('surface freshness is unmeasured (no bonus, no warning) outside a git checkout', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+    assert.ok(
+      result.findings.some((f) => f.severity === 'info' && f.message.includes('Doc freshness unmeasured')),
+      `expected an unmeasured-freshness info finding, got: ${JSON.stringify(result.findings)}`,
+    );
+    assert.ok(
+      !result.findings.some((f) => f.message.includes('git history')),
+      'must not claim a git-history-based freshness verdict outside a git checkout',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function makeCatalogQualityCatalog(system: string, root: string, zeroPropCount: number, withPropsCount: number): SystemCatalog {
+  const components: SystemCatalog['components'] = [];
+  for (let i = 0; i < zeroPropCount; i++) {
+    components.push({ dir: `zero-${i}`, exports: [{ displayName: `Zero${i}`, description: 'x', props: [] }] });
+  }
+  for (let i = 0; i < withPropsCount; i++) {
+    components.push({
+      dir: `full-${i}`,
+      exports: [
+        {
+          displayName: `Full${i}`,
+          description: 'x',
+          props: [{ name: 'value', type: 'string', required: false, defaultValue: 'x', description: 'x' }],
+        },
+      ],
+    });
+  }
+  return {
+    system,
+    generatedAt: new Date().toISOString(),
+    source: { root, commit: 'test', srcHash: 'test' },
+    components,
+    allExports: components.flatMap((c) => c.exports.map((e) => e.displayName)),
+    allPropsByExport: {},
+  };
+}
+
+test('catalog-quality names zero-prop exports as likely extraction gaps, without marking extraction-suspect below 30%', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-zeroprop-'));
+  const system = 'zeropropkit';
+  try {
+    const catalogsDir = join(root, '.audit-data', 'catalogs');
+    mkdirSync(catalogsDir, { recursive: true });
+    writeFileSync(catalogPath(system, catalogsDir), JSON.stringify(makeCatalogQualityCatalog(system, root, 2, 8), null, 2)); // 2/10 = 20%
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_ZEROPROPKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@zeropropkit/components',
+      foundationsPkg: '@zeropropkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkCatalogQuality(system, cfg, { catalogsDir, tokensDir: join(root, 'tokens') });
+
+    const zeroFinding = result.findings.find((f) => f.message.includes('zero documented props'));
+    assert.ok(zeroFinding, `expected a zero-prop finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(zeroFinding!.message.startsWith('2/10'), `expected 2/10 zero-prop exports named, got: ${zeroFinding!.message}`);
+    assert.ok(
+      !result.findings.some((f) => f.message.startsWith('extraction-suspect')),
+      `must not mark extraction-suspect below 30%, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('catalog-quality marks extraction-suspect at >=30% zero-prop exports and reports coverage over the rest', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-suspect-'));
+  const system = 'suspectkit';
+  try {
+    const catalogsDir = join(root, '.audit-data', 'catalogs');
+    mkdirSync(catalogsDir, { recursive: true });
+    writeFileSync(catalogPath(system, catalogsDir), JSON.stringify(makeCatalogQualityCatalog(system, root, 4, 6), null, 2)); // 4/10 = 40%
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_SUSPECTKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@suspectkit/components',
+      foundationsPkg: '@suspectkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkCatalogQuality(system, cfg, { catalogsDir, tokensDir: join(root, 'tokens') });
+
+    const suspectFinding = result.findings.find((f) => f.message.startsWith('extraction-suspect'));
+    assert.ok(suspectFinding, `expected an extraction-suspect finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(suspectFinding!.message.includes('40%'), `expected the finding to name 40%, got: ${suspectFinding!.message}`);
+    assert.ok(
+      suspectFinding!.message.includes('lower bound'),
+      `expected the finding to warn the numbers below are a lower bound, got: ${suspectFinding!.message}`,
+    );
+    // All 6 "full" exports have a resolved type/default/description, so
+    // type/description coverage over the non-zero-prop exports is 100%:
+    // no separate "Only X%" warn should fire for type or description.
+    assert.ok(
+      !result.findings.some((f) => f.message.includes('% of props have a resolved type')),
+      `type coverage over non-zero-prop exports should be 100%, got: ${JSON.stringify(result.findings)}`,
+    );
+    assert.ok(
+      !result.findings.some((f) => f.message.includes('% of props have a description')),
+      `description coverage over non-zero-prop exports should be 100%, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('export-hygiene reachability understands NodeNext specifiers (./dir/index.js, ./dir.js)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-nodenext-reach-'));
+  const system = 'nodenextkit';
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: '@nodenextkit/components', main: './dist/index.js' }));
+    // Both dirs have their own index.ts and ARE re-exported by the root
+    // barrel, just with NodeNext .js extensions on the specifiers — the
+    // shape that used to be flagged unreachable.
+    writeFile(join(root, 'src', 'index.ts'), "export * from './alpha/index.js';\nexport { Beta } from './beta.js';\n");
+    writeFile(join(root, 'src', 'alpha', 'index.ts'), "export const Alpha = () => null;\n");
+    writeFile(join(root, 'src', 'beta', 'index.ts'), "export const Beta = () => null;\n");
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_NODENEXTKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@nodenextkit/components',
+      foundationsPkg: '@nodenextkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkExportHygiene(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    const unreachable = result.findings.filter((f) => f.message.includes('not reachable'));
+    assert.equal(unreachable.length, 0, `NodeNext-specifier re-exports flagged unreachable: ${JSON.stringify(unreachable)}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('export-hygiene treats an exports-map "./*" wildcard as making every component dir reachable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-wildcard-exports-'));
+  const system = 'wildcardkit';
+  try {
+    // utils/ has an index.ts and is NOT in the root barrel, but the exports
+    // map's "./*" wildcard makes it importable as a subpath — the Chakra
+    // shape that used to be flagged unreachable.
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: '@wildcardkit/components', main: './dist/index.js', exports: { '.': './dist/index.js', './*': './dist/*' } }));
+    writeFile(join(root, 'src', 'index.ts'), "export * from './alpha';\n");
+    writeFile(join(root, 'src', 'alpha', 'index.ts'), 'export const Alpha = () => null;\n');
+    writeFile(join(root, 'src', 'utils', 'index.ts'), 'export const cx = (...xs: string[]) => xs.join(" ");\n');
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_WILDCARDKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@wildcardkit/components',
+      foundationsPkg: '@wildcardkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkExportHygiene(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    const unreachable = result.findings.filter((f) => f.message.includes('not reachable'));
+    assert.equal(unreachable.length, 0, `wildcard exports map must make dirs reachable: ${JSON.stringify(unreachable)}`);
+    assert.ok(result.findings.some((f) => f.message.includes('"./*" wildcard')), 'expected the wildcard info finding');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
