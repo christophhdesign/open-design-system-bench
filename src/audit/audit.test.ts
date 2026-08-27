@@ -16,6 +16,8 @@ import { checkSurface } from './checks/surface.ts';
 import { hasDarkSignal } from './checks/tokens.ts';
 import { checkDocsGreppability } from './checks/docs-greppability.ts';
 import { checkCatalogQuality } from './checks/catalog-quality.ts';
+import { checkDeprecation } from './checks/deprecation.ts';
+import { listWorkspacePackages } from './workspace.ts';
 
 function writeFile(path: string, content: string): void {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -743,6 +745,403 @@ test('export-hygiene treats an exports-map "./*" wildcard as making every compon
     const unreachable = result.findings.filter((f) => f.message.includes('not reachable'));
     assert.equal(unreachable.length, 0, `wildcard exports map must make dirs reachable: ${JSON.stringify(unreachable)}`);
     assert.ok(result.findings.some((f) => f.message.includes('"./*" wildcard')), 'expected the wildcard info finding');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Field-test fixes (P2): workspace-wide discovery. A real monorepo commonly
+// ships its MCP server, codemod package, or per-package CHANGELOG in a
+// sibling workspace package rather than in the components package itself or
+// at the repo root — invisible to the pre-P2 checks. src/audit/workspace.ts
+// covers both declaration shapes (package.json "workspaces", pnpm-workspace.yaml).
+// ---------------------------------------------------------------------------
+
+test('surface finds an MCP hint in a workspace package declared via pnpm-workspace.yaml, and names the package', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n  - 'apps/*'\n");
+    writeFile(
+      join(root, 'apps/mcp/package.json'),
+      JSON.stringify({ name: '@testkit/mcp-server', dependencies: { '@modelcontextprotocol/sdk': '^1.0.0' } }, null, 2),
+    );
+
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+    const hit = result.findings.find((f) => f.message.includes('MCP server found in workspace package'));
+    assert.ok(hit, `expected an MCP workspace-hint finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(hit!.message.includes('apps/mcp'), `finding should name apps/mcp, got: ${hit!.message}`);
+    assert.ok(hit!.message.includes('@testkit/mcp-server'), `finding should name the package, got: ${hit!.message}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deprecation finds a codemod package via package.json workspaces, and names it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-codemod-'));
+  const system = 'codemodkit';
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: 'codemodkit-monorepo', private: true, workspaces: ['packages/*'] }, null, 2));
+    writeFile(join(root, 'packages/components/package.json'), JSON.stringify({ name: '@codemodkit/components' }, null, 2));
+    writeFile(join(root, 'packages/components/src/index.ts'), 'export function Widget() { return null; }\n');
+    // Chakra ships packages/codemod: a workspace package whose own name (not
+    // a root-level codemods/ dir or script) is the only signal.
+    writeFile(join(root, 'packages/codemod/package.json'), JSON.stringify({ name: '@codemodkit/codemod' }, null, 2));
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_CODEMODKIT_DIR',
+      componentsSrc: 'packages/components/src',
+      componentsPkg: '@codemodkit/components',
+      foundationsPkg: '@codemodkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkDeprecation(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    const hit = result.findings.find((f) => f.message.includes('Codemod package found in workspace package'));
+    assert.ok(hit, `expected a codemod workspace-package finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(hit!.message.includes('packages/codemod'), `finding should name packages/codemod, got: ${hit!.message}`);
+    assert.ok(hit!.message.includes('@codemodkit/codemod'), `finding should name the package, got: ${hit!.message}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deprecation credits a CHANGELOG.md found only in a sibling workspace package (not root, not the components package)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-siblingchangelog-'));
+  const system = 'siblingchangelogkit';
+  try {
+    writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({ name: 'siblingchangelogkit-monorepo', private: true, workspaces: ['packages/*'] }, null, 2),
+    );
+    writeFile(join(root, 'packages/components/package.json'), JSON.stringify({ name: '@siblingchangelogkit/components' }, null, 2));
+    writeFile(join(root, 'packages/components/src/index.ts'), 'export function Widget() { return null; }\n');
+    // No CHANGELOG.md at root or in packages/components — only in a sibling workspace package.
+    writeFile(join(root, 'packages/theme/package.json'), JSON.stringify({ name: '@siblingchangelogkit/theme' }, null, 2));
+    writeFile(join(root, 'packages/theme/CHANGELOG.md'), '# theme\n\n## 2.0.0\n\n- Repaint.\n');
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_SIBLINGCHANGELOGKIT_DIR',
+      componentsSrc: 'packages/components/src',
+      componentsPkg: '@siblingchangelogkit/components',
+      foundationsPkg: '@siblingchangelogkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkDeprecation(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    assert.ok((result.score as number) >= 25, `expected changelog presence credit sourced from the sibling package, got score ${result.score}`);
+    const countFinding = result.findings.find((f) => f.message.includes('workspace package(s) carry their own changelog'));
+    assert.ok(countFinding, `expected a workspace-changelog-count finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(
+      countFinding!.message.includes('packages/theme/CHANGELOG.md'),
+      `finding should name the example path, got: ${countFinding!.message}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface reports builder-side agent tooling (.claude/agents, .claude/commands) as an info finding, but does not score it', async () => {
+  const withTooling = buildSyntheticSystem();
+  const withoutTooling = buildSyntheticSystem();
+  try {
+    writeFile(join(withTooling.root, '.claude/agents/reviewer.md'), '# reviewer\n');
+    writeFile(join(withTooling.root, '.claude/agents/planner.md'), '# planner\n');
+    writeFile(join(withTooling.root, '.claude/commands/deploy.md'), '# deploy\n');
+
+    const withResult = await checkSurface(withTooling.system, withTooling.cfg, {
+      catalogsDir: withTooling.catalogsDir,
+      tokensDir: withTooling.tokensDir,
+    });
+    const withoutResult = await checkSurface(withoutTooling.system, withoutTooling.cfg, {
+      catalogsDir: withoutTooling.catalogsDir,
+      tokensDir: withoutTooling.tokensDir,
+    });
+
+    const finding = withResult.findings.find((f) => f.message.startsWith('Builder-side agent tooling found'));
+    assert.ok(finding, `expected a builder-tooling finding, got: ${JSON.stringify(withResult.findings)}`);
+    assert.ok(finding!.message.includes('.claude/agents (2)'), `expected an agents count of 2, got: ${finding!.message}`);
+    assert.ok(finding!.message.includes('.claude/commands (1)'), `expected a commands count of 1, got: ${finding!.message}`);
+    assert.ok(
+      !withoutResult.findings.some((f) => f.message.startsWith('Builder-side agent tooling found')),
+      'a system with no .claude/ tooling must not get the finding',
+    );
+    assert.equal(
+      withResult.score,
+      withoutResult.score,
+      'builder-tooling is deliberately unscored: score must be identical with or without it',
+    );
+  } finally {
+    rmSync(withTooling.root, { recursive: true, force: true });
+    rmSync(withoutTooling.root, { recursive: true, force: true });
+  }
+});
+
+test('listWorkspacePackages resolves globs from package.json "workspaces" (array form)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-workspace-pkgjson-'));
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo', private: true, workspaces: ['packages/*'] }, null, 2));
+    writeFile(join(root, 'packages/alpha/package.json'), JSON.stringify({ name: '@monorepo/alpha' }, null, 2));
+    writeFile(join(root, 'packages/beta/package.json'), JSON.stringify({ name: '@monorepo/beta' }, null, 2));
+    mkdirSync(join(root, 'packages/not-a-package'), { recursive: true }); // no package.json — must not appear
+
+    const result = listWorkspacePackages(root);
+    assert.deepEqual(result.map((r) => r.relDir).sort(), ['packages/alpha', 'packages/beta']);
+    const alpha = result.find((r) => r.relDir === 'packages/alpha');
+    assert.equal((alpha?.pkg as { name?: string } | undefined)?.name, '@monorepo/alpha');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listWorkspacePackages resolves globs from package.json "workspaces" (object form { packages })', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-workspace-objform-'));
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo', private: true, workspaces: { packages: ['packages/*'] } }, null, 2));
+    writeFile(join(root, 'packages/gamma/package.json'), JSON.stringify({ name: '@monorepo/gamma' }, null, 2));
+
+    const result = listWorkspacePackages(root);
+    assert.deepEqual(result.map((r) => r.relDir), ['packages/gamma']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listWorkspacePackages resolves globs from pnpm-workspace.yaml', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-workspace-pnpm-'));
+  try {
+    writeFile(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n  - 'apps/*'\n");
+    writeFile(join(root, 'packages/core/package.json'), JSON.stringify({ name: '@monorepo/core' }, null, 2));
+    writeFile(join(root, 'apps/docs/package.json'), JSON.stringify({ name: '@monorepo/docs' }, null, 2));
+
+    const result = listWorkspacePackages(root);
+    assert.deepEqual(result.map((r) => r.relDir).sort(), ['apps/docs', 'packages/core']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listWorkspacePackages expands a scoped "packages/@scope/*" glob', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-workspace-scoped-'));
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: 'monorepo', private: true, workspaces: ['packages/@scope/*'] }, null, 2));
+    writeFile(join(root, 'packages/@scope/one/package.json'), JSON.stringify({ name: '@scope/one' }, null, 2));
+    writeFile(join(root, 'packages/@scope/two/package.json'), JSON.stringify({ name: '@scope/two' }, null, 2));
+
+    const result = listWorkspacePackages(root);
+    assert.deepEqual(result.map((r) => r.relDir).sort(), ['packages/@scope/one', 'packages/@scope/two']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listWorkspacePackages removes negated globs (leading "!") from the result', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-workspace-negation-'));
+  try {
+    writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({ name: 'monorepo', private: true, workspaces: ['packages/*', '!packages/excluded'] }, null, 2),
+    );
+    writeFile(join(root, 'packages/keep/package.json'), JSON.stringify({ name: '@monorepo/keep' }, null, 2));
+    writeFile(join(root, 'packages/excluded/package.json'), JSON.stringify({ name: '@monorepo/excluded' }, null, 2));
+
+    const result = listWorkspacePackages(root);
+    assert.deepEqual(result.map((r) => r.relDir), ['packages/keep']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('listWorkspacePackages returns an empty result for a repo with no workspace declarations', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-workspace-none-'));
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: 'not-a-monorepo' }, null, 2));
+    writeFile(join(root, 'src/index.ts'), 'export const x = 1;\n');
+
+    const result = listWorkspacePackages(root);
+    assert.deepEqual(result, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('workspace globstar (packages/**/**) matches depth-1 packages, zero-or-more semantics', () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-globstar-'));
+  try {
+    // Chakra's real pnpm-workspace.yaml shape: "packages/**/**" must still
+    // match packages/codemod (depth 1) and packages/deep/nested (depth 2).
+    writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - packages/**/**\n');
+    writeFile(join(root, 'packages', 'codemod', 'package.json'), JSON.stringify({ name: '@t/codemod' }));
+    writeFile(join(root, 'packages', 'deep', 'nested', 'package.json'), JSON.stringify({ name: '@t/nested' }));
+    const rels = listWorkspacePackages(root).map((p) => p.relDir).sort();
+    assert.deepEqual(rels, ['packages/codemod', 'packages/deep/nested']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// OSS field test fixes (Aug 2026): MCP hint redesign (collect-then-award,
+// .well-known/mcp, no bare-devDependency false positive), named evidence for
+// every awarded surface signal, empty-extract handling, and CHANGELOG*.md
+// filename variants.
+// ---------------------------------------------------------------------------
+
+test('surface MCP hint ignores a devDependency that merely contains "mcp" (the Storybook addon-mcp false positive) and the warn still fires', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    writeFile(
+      join(root, 'packages/components/package.json'),
+      JSON.stringify(
+        {
+          name: '@testkit/components',
+          main: './dist/index.js',
+          types: './dist/index.d.ts',
+          exports: { '.': './dist/index.js', './toggle': './dist/toggle/index.js', './badge': './dist/badge/index.js' },
+          devDependencies: { '@storybook/addon-mcp': '^1.0.0' },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+    assert.ok(
+      result.findings.some((f) => f.severity === 'warn' && f.message.includes('No MCP server hint found')),
+      `expected the MCP warn to still fire despite the Storybook devDependency, got: ${JSON.stringify(result.findings)}`,
+    );
+    assert.ok(
+      !result.findings.some((f) => f.message.startsWith('MCP hint:') || f.message.startsWith('MCP server found')),
+      `must not award MCP credit off a bare "@storybook/addon-mcp" devDependency, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface MCP hint awards once off a real workspace packages/mcp package even when the components package also carries the addon-mcp devDependency, naming packages/mcp', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: 'testkit-monorepo', private: true, workspaces: ['packages/*'] }, null, 2));
+    writeFile(
+      join(root, 'packages/components/package.json'),
+      JSON.stringify(
+        {
+          name: '@testkit/components',
+          main: './dist/index.js',
+          types: './dist/index.d.ts',
+          exports: { '.': './dist/index.js', './toggle': './dist/toggle/index.js', './badge': './dist/badge/index.js' },
+          devDependencies: { '@storybook/addon-mcp': '^1.0.0' },
+        },
+        null,
+        2,
+      ),
+    );
+    writeFile(join(root, 'packages/mcp/package.json'), JSON.stringify({ name: '@testkit/mcp' }, null, 2));
+
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+    const mcpFindings = result.findings.filter((f) => f.message.startsWith('MCP server found') || f.message.startsWith('MCP hint:'));
+    assert.equal(mcpFindings.length, 1, `expected exactly one MCP finding (awarded once), got: ${JSON.stringify(result.findings)}`);
+    assert.ok(mcpFindings[0].message.includes('packages/mcp'), `finding should name packages/mcp, got: ${mcpFindings[0].message}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface MCP hint finds a root public/.well-known/mcp file and names it as evidence', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    writeFile(join(root, 'public/.well-known/mcp'), '{"name":"testkit-mcp"}\n');
+
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+    const hit = result.findings.find((f) => f.message.startsWith('MCP hint:'));
+    assert.ok(hit, `expected an MCP hint finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(hit!.message.includes('public/.well-known/mcp'), `finding should name public/.well-known/mcp, got: ${hit!.message}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface skills-dir and editor-rules awards emit named findings', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    writeFile(join(root, '.claude/skills/reviewer/SKILL.md'), '# reviewer\n');
+    writeFile(join(root, '.claude/skills/planner/SKILL.md'), '# planner\n');
+    writeFile(join(root, '.github/copilot-instructions.md'), '# rules\n');
+
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+
+    const skillFinding = result.findings.find((f) => f.message.startsWith('Skill bundles found'));
+    assert.ok(skillFinding, `expected a named skill-bundles finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(skillFinding!.message.includes('.claude/skills (2 skills)'), `expected a count of 2 skills, got: ${skillFinding!.message}`);
+
+    const editorFinding = result.findings.find((f) => f.message.startsWith('Editor rules found'));
+    assert.ok(editorFinding, `expected a named editor-rules finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(editorFinding!.message.includes('.github/copilot-instructions.md'), `finding should name the file, got: ${editorFinding!.message}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface treats an empty-extract catalog snapshot as unmeasured: warn finding, no machine-catalog points', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-emptyextract-'));
+  const system = 'emptyextractkit';
+  try {
+    const catalogsDir = join(root, '.audit-data', 'catalogs');
+    mkdirSync(catalogsDir, { recursive: true });
+    const emptyCatalog: SystemCatalog = {
+      system,
+      generatedAt: new Date().toISOString(),
+      source: { root, commit: 'test', srcHash: 'test' },
+      components: [],
+      allExports: [],
+      allPropsByExport: {},
+    };
+    writeFileSync(catalogPath(system, catalogsDir), JSON.stringify(emptyCatalog, null, 2));
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_EMPTYEXTRACTKIT_DIR',
+      componentsSrc: 'src', // does not exist
+      componentsPkg: '@emptyextractkit/components',
+      foundationsPkg: '@emptyextractkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir: join(root, 'tokens') });
+    const warnFinding = result.findings.find((f) => f.severity === 'warn' && f.message.includes('empty catalog'));
+    assert.ok(warnFinding, `expected the empty-extract warn finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(
+      !result.findings.some((f) => f.message.startsWith('Machine-readable catalog found')),
+      `must not award machine-catalog points on an empty-extract snapshot, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deprecation accepts a CHANGELOG.en-US.md root variant (Ant Design shape) and names it in the finding', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-localechangelog-'));
+  const system = 'localechangelogkit';
+  try {
+    writeFile(join(root, 'CHANGELOG.en-US.md'), '# Changelog\n\n## 1.2.0\n\n- Something.\n');
+    writeFile(join(root, 'src/index.ts'), 'export function Widget() { return null; }\n');
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_LOCALECHANGELOGKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@localechangelogkit/components',
+      foundationsPkg: '@localechangelogkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkDeprecation(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    assert.ok((result.score as number) >= 25, `expected changelog presence credit, got score ${result.score}`);
+    const finding = result.findings.find((f) => f.message.includes('CHANGELOG.en-US.md'));
+    assert.ok(finding, `expected a finding naming CHANGELOG.en-US.md, got: ${JSON.stringify(result.findings)}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

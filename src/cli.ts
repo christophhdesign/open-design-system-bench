@@ -414,14 +414,14 @@ async function main(): Promise<number> {
       const { runExtract } = await import('./extract/index.ts');
       const systemsConfigPath = resolveSystemsConfigPath(values.config);
       const { catalogsDir, tokensDir } = resolveDataDirs(systemsConfigPath);
-      await runExtract({
+      const failedCount = await runExtract({
         systems: list(values.systems) as SystemId[] | undefined,
         allowStale: values['allow-stale'] ?? false,
         configPath: systemsConfigPath,
         catalogsDir,
         tokensDir,
       });
-      return 0;
+      return failedCount > 0 ? 1 : 0;
     }
 
     case 'validate-tasks': {

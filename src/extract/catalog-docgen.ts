@@ -1,12 +1,15 @@
 // "docgen" strategy: for any typed React design system with no prebuilt
 // machine catalog, extract one via react-docgen-typescript's
-// withCustomConfig() over each component's tsx entry file, using a propFilter
-// that drops inherited @types/react / csstype / @radix-ui props.
+// withCompilerOptions() over each component's tsx entry file, using a
+// propFilter that drops inherited @types/react / csstype / @radix-ui props.
+// (We load and parse the tsconfig ourselves rather than use the higher-level
+// withCustomConfig() — see loadCompilerOptions below — so that an unknown
+// compiler option from a newer TypeScript doesn't hard-fail extraction.)
 //
 // There's no pre-enumerated component list, so we derive the public API
-// ourselves by parsing the barrel (`<componentsSrc>/index.ts`) with
-// @babel/parser. Real-world barrels come in two shapes, and both are public
-// API declarations:
+// ourselves by parsing the barrel (`<componentsSrc>/index.{ts,tsx,js,jsx,d.ts}`
+// — see resolveBarrelPath in normalize.ts) with @babel/parser. Real-world
+// barrels come in two shapes, and both are public API declarations:
 //   - `export * from './<dir>'`: the
 //     directory's own index module decides which of its value exports are
 //     public (PascalCase, non-type) components.
@@ -26,12 +29,13 @@
 // the system root (a component living in a sibling package/dir) is followed
 // rather than silently dropped.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parse } from '@babel/parser';
 import type { ExportSpecifier } from '@babel/types';
-import { withCustomConfig } from 'react-docgen-typescript';
+import { withCompilerOptions } from 'react-docgen-typescript';
 import type { ComponentDoc, ParserOptions, PropItem } from 'react-docgen-typescript';
+import ts from 'typescript';
 import type { CatalogExport, CatalogProp, SystemCatalog, SystemConfig, SystemId } from '../types.ts';
 import {
   buildIndexes,
@@ -40,6 +44,7 @@ import {
   gitCommit,
   hashPaths,
   mergeBarrelExports,
+  resolveBarrelPath,
   resolveTsconfigUpward,
 } from './normalize.ts';
 
@@ -350,9 +355,177 @@ const parserOptions: ParserOptions = {
   propFilter,
 };
 
+/**
+ * react-docgen-typescript reports `PropItem.parent.fileName` through its own
+ * trimFileName() helper (see node_modules/react-docgen-typescript/lib/trimFileName.js),
+ * which is NOT the same as the untouched absolute `ComponentDoc.filePath` we
+ * pass to docgen ourselves. trimFileName walks upward from process.cwd()
+ * (the "docgen project root" — wherever `extract` is invoked from) looking
+ * for a filesystem ancestor shared with the prop's declaring file; when it
+ * finds one at ancestor level k, it rewrites the path to be relative to that
+ * ancestor's *parent* (preserving one directory name for readability). When
+ * no shared ancestor exists (the common case for a component library
+ * checked out somewhere unrelated to cwd, or in our own tests where fixtures
+ * live under os.tmpdir()), it returns the original absolute path unchanged.
+ *
+ * So `parent.fileName` is either already absolute, or relative to the parent
+ * of *some* ancestor of cwd — and we don't know which one. To reconstruct
+ * it exactly, mirror the same upward walk from cwd and take the first
+ * candidate that actually exists on disk (this inverts trimFileName's own
+ * relative()/join() pairing at whichever level it matched). If nothing
+ * resolves, we can't verify where the prop lives, so the caller treats it as
+ * inherited rather than risk crediting a third-party prop as the system's
+ * own documented API.
+ */
+function resolveParentFileName(fileName: string): string | undefined {
+  if (isAbsolute(fileName)) return fileName;
+  let dir = dirname(process.cwd());
+  for (;;) {
+    const candidate = resolve(dir, fileName);
+    if (existsSync(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined; // reached the filesystem root without a match
+    dir = parent;
+  }
+}
+
+/**
+ * OWN when docgen gives no `parent` metadata at all (the prop is declared
+ * directly on the component's own props type — react-docgen-typescript only
+ * fills in `parent` for props inherited from an intersected/extended type),
+ * or when `parent.fileName` resolves inside `srcDir`. INHERITED otherwise —
+ * under node_modules, or anywhere else outside srcDir (a styled-system
+ * spread, a polymorphic factory's generic base, a sibling shared-types dir,
+ * ...). Only props that already survived `propFilter` reach this (that
+ * filter unconditionally drops @types/react/csstype/@radix-ui regardless of
+ * own/inherited status).
+ */
+// A parent type that contributes props to this many DISTINCT exports is
+// shared infrastructure (a style-prop system, a polymorphic factory), not any
+// single component's own API. The outside-srcDir rule alone cannot catch it:
+// Chakra v3 generates SystemProperties INSIDE componentsSrc
+// (src/styled-system/generated/system.gen.ts) and it feeds 700+ props to
+// virtually every export, which is what ballooned the field-test catalog to
+// 124 MB. 20 sits well above any real compound-component family and far
+// below a real catalog's export count.
+const SHARED_PARENT_EXPORT_THRESHOLD = 20;
+
+// resolveParentFileName walks the filesystem per lookup; the same parent
+// fileName repeats across hundreds of thousands of props in a big extract,
+// so memoize (keys are stable within one process).
+const parentResolveCache = new Map<string, string | undefined>();
+
+/** Stable identity for a prop's declaring type: "<fileName>#<TypeName>". */
+export function propParentKey(prop: Pick<PropItem, 'parent'>): string | undefined {
+  return prop.parent ? `${prop.parent.fileName}#${prop.parent.name}` : undefined;
+}
+
+/**
+ * Splits one export's docgen props into own (full metadata) and inherited
+ * (name-only). A prop is inherited when its declaring type lives outside
+ * componentsSrc (node_modules, a sibling package) OR is shared across at
+ * least SHARED_PARENT_EXPORT_THRESHOLD distinct exports (in-tree style-prop
+ * systems). No parent metadata means declared inline: own.
+ */
+export function splitOwnInherited(
+  props: PropItem[],
+  srcDir: string,
+  exportCountByParent: Map<string, number>,
+  threshold = SHARED_PARENT_EXPORT_THRESHOLD,
+): { own: PropItem[]; inheritedNames: string[] } {
+  const own: PropItem[] = [];
+  const inheritedNames = new Set<string>();
+  for (const prop of props) {
+    const key = propParentKey(prop);
+    if (!key) {
+      own.push(prop);
+      continue;
+    }
+    if ((exportCountByParent.get(key) ?? 0) >= threshold) {
+      inheritedNames.add(prop.name);
+      continue;
+    }
+    const fileName = prop.parent!.fileName;
+    if (!parentResolveCache.has(fileName)) parentResolveCache.set(fileName, resolveParentFileName(fileName));
+    const resolved = parentResolveCache.get(fileName);
+    if (resolved && isInsideRoot(srcDir, resolved)) own.push(prop);
+    else inheritedNames.add(prop.name);
+  }
+  return { own, inheritedNames: [...inheritedNames].sort() };
+}
+
+// react-docgen-typescript's withCustomConfig() reads and parses the tsconfig
+// itself (ts.readConfigFile + ts.parseJsonConfigFileContent) and throws on
+// the FIRST diagnostic parseJsonConfigFileContent reports, with no
+// distinction between error categories — including "Unknown compiler
+// option" errors. Design systems increasingly write tsconfig.json against
+// whatever TypeScript version their own toolchain targets, which can be
+// newer than the TS this bench bundles (5.9.3 as of writing); Primer's
+// tsconfig sets `"stableTypeOrdering": true`, a TS 6.0 option, and that skew
+// will only get more common as systems upgrade ahead of us. Loading the
+// config ourselves lets us tell "I don't recognize this key" apart from a
+// real config error, ignore only the former (with a warning naming the
+// ignored option), and still fail loudly on the latter — then hand the
+// resulting CompilerOptions to withCompilerOptions(), react-docgen-
+// typescript's lower-level entry point that skips its own config parsing
+// entirely.
+function loadCompilerOptions(tsconfigPath: string): ts.CompilerOptions {
+  const basePath = dirname(tsconfigPath);
+  const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+  if (error) {
+    const message = typeof error.messageText === 'string' ? error.messageText : ts.flattenDiagnosticMessageText(error.messageText, '\n');
+    throw new Error(`cannot load tsconfig.json at ${tsconfigPath}: ${message}`);
+  }
+
+  // basePath + tsconfigPath match withCustomConfig's own call shape, so
+  // `extends` chains resolve exactly the same way (parseJsonConfigFileContent
+  // walks `extends` itself; a missing extends target surfaces as its own
+  // hard error below, e.g. TS5083 "Cannot read file").
+  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, basePath, {}, tsconfigPath);
+
+  const ignoredOptionNames: string[] = [];
+  const hardErrors: ts.Diagnostic[] = [];
+  for (const diagnostic of parsed.errors) {
+    // Verified against the installed TS version (see extract.test.ts): an
+    // unknown key under "compilerOptions" reports as TS5023 ("Unknown
+    // compiler option 'x'.") or, when TS finds a close match, TS5025
+    // ("...Did you mean 'y'?") — both mean "I don't recognize this option"
+    // and are exactly the version-skew case this exists to tolerate. TS5024
+    // ("Compiler option 'x' requires a value of type y") is a genuine type
+    // error on a *known* option and must still fail loudly, not be lumped in.
+    if (diagnostic.code === 5023 || diagnostic.code === 5025) {
+      const text = typeof diagnostic.messageText === 'string' ? diagnostic.messageText : ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
+      const match = /Unknown compiler option '([^']+)'/.exec(text);
+      ignoredOptionNames.push(match ? match[1] : text);
+      continue;
+    }
+    hardErrors.push(diagnostic);
+  }
+
+  if (ignoredOptionNames.length > 0) {
+    console.warn(
+      `[extract] ${tsconfigPath}: ignoring unknown compiler option(s) ${ignoredOptionNames.join(', ')} — ` +
+        `likely written for a newer TypeScript than this bench bundles (${ts.version})`,
+    );
+  }
+
+  if (hardErrors.length > 0) {
+    const first = hardErrors[0];
+    const text = typeof first.messageText === 'string' ? first.messageText : ts.flattenDiagnosticMessageText(first.messageText, '\n');
+    throw new Error(`invalid tsconfig.json at ${tsconfigPath}: TS${first.code}: ${text}`);
+  }
+
+  return parsed.options;
+}
+
 export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig): Promise<SystemCatalog> {
   const srcDir = join(cfg.root, cfg.componentsSrc);
-  const barrelPath = join(srcDir, 'index.ts');
+  const barrelPath = resolveBarrelPath(srcDir);
+  if (!barrelPath) {
+    throw new Error(
+      `no barrel entry point (index.ts, .tsx, .js, .jsx, or .d.ts) found in ${srcDir} — docgen extraction needs one to discover the public API`,
+    );
+  }
   const barrelDirs = collectBarrelDirs(barrelPath, srcDir, cfg.root);
 
   // dir -> ordered list of its public (PascalCase, value-exported) names.
@@ -395,9 +568,12 @@ export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig):
   }
 
   const tsconfigPath = resolveTsconfigUpward(srcDir, cfg.root);
-  const docgenParser = withCustomConfig(tsconfigPath, parserOptions);
+  const compilerOptions = loadCompilerOptions(tsconfigPath);
+  const docgenParser = withCompilerOptions(compilerOptions, parserOptions);
 
   const components: SystemCatalog['components'] = [];
+  const parentOwners = new Map<string, Set<string>>();
+  const pendingSplits: Array<{ entry: CatalogExport; rawProps: PropItem[] }> = [];
   for (const [dir, names] of dirToNames) {
     if (names.length === 0) continue; // e.g. utils/cx, utils/is-react-component: no public components
     const fileModule = fileModuleEntries.get(dir);
@@ -419,11 +595,26 @@ export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig):
         if (!publicNames.has(comp.displayName)) continue; // internal/unexported helper — not public API
         if (covered.has(comp.displayName)) continue; // same file appearing via multiple entry tsx (shouldn't happen, but be safe)
         covered.add(comp.displayName);
-        exportsForDir.push({
+
+        // The own/inherited split needs a GLOBAL view (the shared-parent
+        // rule counts how many distinct exports a declaring type feeds), so
+        // pass 1 only records the raw props and tallies parents; the split
+        // itself happens once after every dir is parsed.
+        const rawProps = Object.values(comp.props || {});
+        const exportEntry: CatalogExport = {
           displayName: comp.displayName,
           description: (comp.description || '').trim(),
-          props: Object.values(comp.props || {}).map(toCatalogProp),
-        });
+          props: [],
+        };
+        for (const prop of rawProps) {
+          const key = propParentKey(prop);
+          if (!key) continue;
+          let owners = parentOwners.get(key);
+          if (!owners) parentOwners.set(key, (owners = new Set()));
+          owners.add(`${dir}#${comp.displayName}`);
+        }
+        pendingSplits.push({ entry: exportEntry, rawProps });
+        exportsForDir.push(exportEntry);
       }
     }
 
@@ -445,7 +636,29 @@ export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig):
     components.push({ dir, exports: exportsForDir });
   }
 
+  // Pass 2: with the full parent tally in hand, split every export's props.
+  const exportCountByParent = new Map<string, number>();
+  for (const [key, owners] of parentOwners) exportCountByParent.set(key, owners.size);
+  for (const { entry, rawProps } of pendingSplits) {
+    const { own, inheritedNames } = splitOwnInherited(rawProps, srcDir, exportCountByParent);
+    entry.props = own.map(toCatalogProp);
+    if (inheritedNames.length > 0) entry.inheritedProps = inheritedNames;
+  }
+
   const { allExports, allPropsByExport } = buildIndexes(components);
+
+  // buildIndexes only folds exp.props (own props only, post-split) into
+  // allPropsByExport. Merge each export's inheritedProps names back in too —
+  // allPropsByExport is the grading set the apiFidelity invented-prop check
+  // keys off, and the own/inherited split must not shrink it.
+  for (const comp of components) {
+    for (const exp of comp.exports) {
+      if (!exp.inheritedProps || exp.inheritedProps.length === 0) continue;
+      const merged = new Set(allPropsByExport[exp.displayName] ?? []);
+      for (const name of exp.inheritedProps) merged.add(name);
+      allPropsByExport[exp.displayName] = [...merged];
+    }
+  }
 
   // components/allPropsByExport above only cover docgen-documentable
   // components. The public API is bigger — hooks, variant-class helpers

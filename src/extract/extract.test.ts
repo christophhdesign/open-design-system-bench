@@ -8,14 +8,14 @@
 // real design-system repos.
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type { SystemConfig } from '../types.ts';
-import { extractDocgenCatalog } from './catalog-docgen.ts';
-import { collectBarrelExports, findTsconfigUpward, resolveTsconfigUpward } from './normalize.ts';
+import { extractDocgenCatalog, splitOwnInherited } from './catalog-docgen.ts';
+import { collectBarrelExports, findTsconfigUpward, resolveBarrelPath, resolveTsconfigUpward } from './normalize.ts';
 
 function writeSyntheticSystem(): string {
   const root = mkdtempSync(join(tmpdir(), 'odsys-extract-'));
@@ -235,6 +235,68 @@ test('a re-export resolving outside componentsSrc but inside the system root is 
   assert.ok(boxComponent, 'Box has a full catalog component entry (not just an allExports stub)');
 });
 
+// ---------------------------------------------------------------------------
+// Own vs. inherited props (Phase 2 item 2.3): a prop declared outside the
+// system's componentsSrc tree (styled-system spreads, polymorphic factory
+// types, DOM intersections) must contribute only its name, not a full
+// CatalogProp, while still counting toward allPropsByExport so the
+// apiFidelity invented-prop check (which keys off allPropsByExport) sees no
+// difference.
+// ---------------------------------------------------------------------------
+
+test('own props keep full metadata; props from a type declared outside componentsSrc become name-only inheritedProps', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-inherited-props-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Widget'), { recursive: true });
+  mkdirSync(join(root, 'shared'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/inherited-props' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } }));
+
+  // A type declared in a sibling dir outside componentsSrc ('src') but still
+  // inside the system root — the styled-system-spread / DOM-intersection
+  // shape this feature exists for.
+  writeFileSync(join(root, 'shared', 'style-props.ts'), 'export interface StyleProps { m?: string; p?: string }\n');
+
+  writeFileSync(join(src, 'index.ts'), "export * from './Widget';\n");
+  writeFileSync(join(src, 'Widget', 'index.ts'), "export * from './Widget';\n");
+  writeFileSync(
+    join(src, 'Widget', 'Widget.tsx'),
+    [
+      "import type { StyleProps } from '../../shared/style-props';",
+      'export interface WidgetOwnProps { label: string }',
+      'export type WidgetProps = WidgetOwnProps & StyleProps;',
+      'export const Widget = (props: WidgetProps) => <div>{props.label}</div>;',
+      '',
+    ].join('\n'),
+  );
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  const widget = catalog.components.flatMap((c) => c.exports).find((e) => e.displayName === 'Widget');
+  assert.ok(widget, 'Widget export extracted');
+
+  const ownNames = widget!.props.map((p) => p.name).sort();
+  assert.deepEqual(ownNames, ['label'], 'own prop table only carries the in-tree prop');
+  const labelProp = widget!.props.find((p) => p.name === 'label');
+  assert.equal(labelProp?.type, 'string', 'own prop keeps full CatalogProp metadata');
+
+  assert.deepEqual(widget!.inheritedProps, ['m', 'p'], 'externally-declared props are recorded name-only, sorted');
+  assert.ok(
+    !widget!.props.some((p) => p.name === 'm' || p.name === 'p'),
+    'inherited prop names must not also appear in the own props array',
+  );
+
+  const allowed = new Set(catalog.allPropsByExport.Widget);
+  assert.ok(allowed.has('label') && allowed.has('m') && allowed.has('p'), 'allPropsByExport merges own and inherited names — the apiFidelity grading contract this change must not break');
+});
+
+test('a component with no inherited props gets no inheritedProps field', async () => {
+  const root = writeSyntheticSystem(); // Alpha's props (label: string) are declared entirely in-tree
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  const alpha = catalog.components.flatMap((c) => c.exports).find((e) => e.displayName === 'Alpha');
+  assert.ok(alpha, 'Alpha export extracted');
+  assert.equal(alpha!.inheritedProps, undefined, 'no inherited props means the field is omitted entirely, not an empty array');
+});
+
 test('a direct-file NodeNext specifier (export { X } from "./Button.js") resolves to the .tsx source', async () => {
   const root = mkdtempSync(join(tmpdir(), 'odsys-extract-js-directfile-'));
   const src = join(root, 'src');
@@ -254,4 +316,141 @@ test('a direct-file NodeNext specifier (export { X } from "./Button.js") resolve
   assert.ok(names.includes('Button'), `Button missing from ${JSON.stringify(names)}`);
   assert.ok(catalog.allExports.includes('Button'), 'Button missing from allExports');
   assert.ok(catalog.allExports.includes('HelperBadge'), 'export * with a direct-file .js specifier missing from allExports');
+});
+
+test('splitOwnInherited: a parent type shared across >= threshold exports is inherited even inside componentsSrc', () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-split-shared-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'styles'), { recursive: true });
+  // The shared type genuinely lives INSIDE componentsSrc (the Chakra v3
+  // shape: generated style props under src/styled-system/).
+  const sharedFile = join(src, 'styles', 'system.gen.ts');
+  writeFileSync(sharedFile, 'export interface SystemProps { m?: string }\n');
+  const ownFile = join(src, 'button.tsx');
+  writeFileSync(ownFile, 'export {}\n');
+
+  const mkProp = (name: string, parentFile: string | undefined, parentName = 'SystemProps') =>
+    ({ name, type: { name: 'string' }, required: false, description: '', ...(parentFile ? { parent: { fileName: parentFile, name: parentName } } : {}) }) as unknown as import('react-docgen-typescript').PropItem;
+
+  const sharedProp = mkProp('m', sharedFile);
+  const ownProp = mkProp('variant', ownFile, 'ButtonProps');
+  const inlineProp = mkProp('size', undefined);
+
+  // Tally says SystemProps feeds 25 distinct exports; ButtonProps feeds 1.
+  const tally = new Map<string, number>([
+    [`${sharedFile}#SystemProps`, 25],
+    [`${ownFile}#ButtonProps`, 1],
+  ]);
+
+  const { own, inheritedNames } = splitOwnInherited([sharedProp, ownProp, inlineProp], src, tally, 20);
+  assert.deepEqual(inheritedNames, ['m'], 'shared in-tree parent must classify as inherited');
+  assert.deepEqual(own.map((p) => p.name).sort(), ['size', 'variant'], 'component-local and inline props stay own');
+
+  // Below the threshold the same in-tree parent is own.
+  const small = splitOwnInherited([sharedProp], src, new Map([[`${sharedFile}#SystemProps`, 3]]), 20);
+  assert.equal(small.own.length, 1);
+  rmSync(root, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// OSS field-test regressions round 2 (Primer, MUI): tolerating an unknown
+// tsconfig compiler option from a newer TypeScript than this bench bundles,
+// and accepting a .js/.d.ts (rather than .ts) barrel entry point.
+// ---------------------------------------------------------------------------
+
+test('docgen extraction tolerates an unknown/future tsconfig compiler option instead of hard-failing on version skew', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-tsconfig-future-option-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Button'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/future-tsconfig' }));
+  // "stableTypeOrdering" is Primer's real-world trigger (a TS 6.0 option; the
+  // bench bundles TS 5.9.3) — a made-up name serves just as well since the
+  // point is that ANY unrecognized compilerOptions key must not hard-fail.
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({ compilerOptions: { jsx: 'react-jsx', strict: true, someFutureOption2030: true } }),
+  );
+  writeFileSync(join(src, 'index.ts'), "export * from './Button';\n");
+  writeFileSync(join(src, 'Button', 'index.ts'), "export * from './Button';\n");
+  writeFileSync(join(src, 'Button', 'Button.tsx'), 'export const Button = () => <button />;\n');
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  const names = catalog.components.flatMap((c) => c.exports.map((e) => e.displayName));
+  assert.ok(names.includes('Button'), 'extraction proceeded past the unknown compiler option');
+});
+
+test('a genuinely malformed tsconfig.json still fails extraction with a clear, actionable message', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-tsconfig-malformed-'));
+  const src = join(root, 'src');
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/malformed-tsconfig' }));
+  writeFileSync(join(root, 'tsconfig.json'), 'not json at all {{{');
+  writeFileSync(join(src, 'index.ts'), 'export {};\n');
+
+  await assert.rejects(
+    () => extractDocgenCatalog('synthetic', makeConfig(root)),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /tsconfig\.json/);
+      return true;
+    },
+  );
+});
+
+test('resolveBarrelPath tries index.ts, .tsx, .js, .jsx, .d.ts in that order and undefined when none exist', () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-resolve-barrel-'));
+  const empty = join(root, 'empty');
+  mkdirSync(empty, { recursive: true });
+  assert.equal(resolveBarrelPath(empty), undefined);
+
+  const jsOnly = join(root, 'js-only');
+  mkdirSync(jsOnly, { recursive: true });
+  writeFileSync(join(jsOnly, 'index.js'), 'module.exports = {};\n');
+  writeFileSync(join(jsOnly, 'index.d.ts'), 'export {};\n');
+  assert.equal(resolveBarrelPath(jsOnly), join(jsOnly, 'index.js'), 'index.js is preferred over index.d.ts');
+
+  const tsOnly = join(root, 'ts-only');
+  mkdirSync(tsOnly, { recursive: true });
+  writeFileSync(join(tsOnly, 'index.js'), 'module.exports = {};\n');
+  writeFileSync(join(tsOnly, 'index.ts'), 'export {};\n');
+  assert.equal(resolveBarrelPath(tsOnly), join(tsOnly, 'index.ts'), 'index.ts is preferred over index.js');
+});
+
+test('a system whose only barrel is index.js (MUI shape: index.js + index.d.ts, no index.ts) still extracts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-js-barrel-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Widget'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/js-barrel' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } }));
+
+  // No src/index.ts at all — only a compiled-JS barrel plus its type
+  // declarations, exactly MUI's packages/mui-material/src shape.
+  writeFileSync(join(src, 'index.js'), "export * from './Widget';\n");
+  writeFileSync(join(src, 'index.d.ts'), "export * from './Widget';\n");
+  writeFileSync(join(src, 'Widget', 'index.ts'), "export { Widget } from './Widget';\n");
+  writeFileSync(join(src, 'Widget', 'Widget.tsx'), 'export const Widget = () => <div />;\n');
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  assert.ok(catalog.allExports.includes('Widget'), 'Widget discovered via the .js barrel');
+  const widgetDir = catalog.components.find((c) => c.dir === 'Widget');
+  assert.ok(widgetDir, 'Widget landed as a full catalog component, not just an allExports stub');
+  assert.ok(widgetDir!.exports.some((e) => e.displayName === 'Widget'));
+});
+
+test('docgen extraction throws an actionable error when no barrel entry point exists at all', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-no-barrel-'));
+  const src = join(root, 'src');
+  mkdirSync(src, { recursive: true }); // no index.* of any kind
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/no-barrel' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } }));
+
+  await assert.rejects(
+    () => extractDocgenCatalog('synthetic', makeConfig(root)),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /no barrel entry point/);
+      assert.ok(err.message.includes(src));
+      return true;
+    },
+  );
 });

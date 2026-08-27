@@ -127,6 +127,21 @@ export interface CatalogExport {
   displayName: string; // PascalCase public symbol
   description: string;
   props: CatalogProp[];
+  /**
+   * Names (only) of props whose declaration lives outside the system's
+   * componentsSrc tree: styled-system spreads, polymorphic factory types,
+   * DOM/HTML attribute intersections, and similar inherited surfaces.
+   * Deliberately name-only — capturing full CatalogProp metadata (type,
+   * description, default) for the hundreds of inherited props a single
+   * component can carry is what ballooned real-world catalogs past 100 MB
+   * (measured: ~845 style-system props per component on Chakra UI). These
+   * names still count toward `allPropsByExport`, so grading (the
+   * invented-prop check in apiFidelity, which keys off allPropsByExport) is
+   * unaffected — only the catalog-quality check's per-prop coverage
+   * reporting is scoped to own props. Omitted (not an empty array) when an
+   * export has no inherited props.
+   */
+  inheritedProps?: string[];
 }
 
 export interface SystemCatalog {

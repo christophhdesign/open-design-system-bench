@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runInit } from './wizard.ts';
+import { probeComponentsSrcCandidates, runInit } from './wizard.ts';
 import type { SystemConfig } from '../types.ts';
 
 interface SystemsConfigFileShape {
@@ -355,5 +355,127 @@ test('runInit writes systems.config.json as pretty JSON with a trailing newline'
     assert.ok(existsSync(result.configPath));
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// probeComponentsSrcCandidates: monorepo componentsSrc discovery (2.5)
+// ---------------------------------------------------------------------------
+
+test('probeComponentsSrcCandidates ranks monorepo packages by export count, highest first', async () => {
+  const repo = tmpCwd('odsys-probe-monorepo-');
+  try {
+    mkdirSync(join(repo, 'packages', 'aaa', 'src'), { recursive: true });
+    mkdirSync(join(repo, 'packages', 'bbb', 'src'), { recursive: true });
+    writeFileSync(
+      join(repo, 'packages', 'aaa', 'src', 'index.ts'),
+      'export function Aaa1() { return null; }\nexport function Aaa2() { return null; }\n',
+    );
+    writeFileSync(
+      join(repo, 'packages', 'bbb', 'src', 'index.ts'),
+      'export function Bbb1() { return null; }\n' +
+        'export function Bbb2() { return null; }\n' +
+        'export function Bbb3() { return null; }\n' +
+        'export function Bbb4() { return null; }\n' +
+        'export function Bbb5() { return null; }\n',
+    );
+
+    const candidates = probeComponentsSrcCandidates(repo);
+    assert.deepEqual(candidates, [
+      { relDir: join('packages', 'bbb', 'src'), exportCount: 5 },
+      { relDir: join('packages', 'aaa', 'src'), exportCount: 2 },
+    ]);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('probeComponentsSrcCandidates returns an empty array when no candidate dirs exist', async () => {
+  const repo = tmpCwd('odsys-probe-empty-');
+  try {
+    writeFileSync(join(repo, 'README.md'), '# nothing here\n');
+    assert.deepEqual(probeComponentsSrcCandidates(repo), []);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('probeComponentsSrcCandidates never throws on an unparseable barrel, and still ranks the rest', async () => {
+  const repo = tmpCwd('odsys-probe-broken-');
+  try {
+    mkdirSync(join(repo, 'packages', 'broken', 'src'), { recursive: true });
+    mkdirSync(join(repo, 'packages', 'good', 'src'), { recursive: true });
+    writeFileSync(join(repo, 'packages', 'broken', 'src', 'index.ts'), 'export function ( {{{ not valid typescript at all\n');
+    writeFileSync(
+      join(repo, 'packages', 'good', 'src', 'index.ts'),
+      'export function Good1() { return null; }\n' +
+        'export function Good2() { return null; }\n' +
+        'export function Good3() { return null; }\n',
+    );
+
+    const candidates = probeComponentsSrcCandidates(repo);
+    assert.deepEqual(candidates, [{ relDir: join('packages', 'good', 'src'), exportCount: 3 }]);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('runInit non-interactive source mode defaults componentsSrc to the sole nonzero probe candidate when omitted', async () => {
+  const repo = tmpCwd('odsys-probe-default-repo-');
+  const cwd = tmpCwd('odsys-probe-default-cwd-');
+  try {
+    mkdirSync(join(repo, 'packages', 'onlykit', 'src'), { recursive: true });
+    writeFileSync(
+      join(repo, 'packages', 'onlykit', 'src', 'index.ts'),
+      'export function OnlyKitButton() { return null; }\nexport function OnlyKitInput() { return null; }\n',
+    );
+
+    const result = await runInit({
+      nonInteractive: true,
+      cwd,
+      answers: { systemId: 'onlykit', consume: 'source', root: repo },
+    });
+
+    const written = JSON.parse(readFileSync(result.configPath, 'utf8')) as SystemsConfigFileShape;
+    assert.equal(written.systems.onlykit.componentsSrc, join('packages', 'onlykit', 'src'));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('probeComponentsSrcCandidates reaches two-level package layouts (packages/<category>/<name>/src)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-init-probe-deep-'));
+  try {
+    // The Radix Primitives shape: the aggregate package sits two levels under
+    // packages/, which the one-level globs used to miss entirely.
+    mkdirSync(join(root, 'packages', 'react', 'radix-ui', 'src'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'react', 'radix-ui', 'src', 'index.ts'), "export { Thing } from './thing';\n");
+    mkdirSync(join(root, 'packages', 'react', 'radix-ui', 'src', 'thing'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'react', 'radix-ui', 'src', 'thing', 'index.ts'), 'export const Thing = () => null;\n');
+    const candidates = probeComponentsSrcCandidates(root, 5);
+    assert.deepEqual(candidates.map((c) => c.relDir), ['packages/react/radix-ui/src']);
+    assert.equal(candidates[0].exportCount, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('probeComponentsSrcCandidates ranks a root-level components/ dir and an index.js barrel (antd/MUI shapes)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-init-probe-shapes-'));
+  try {
+    // Ant Design shape: <root>/components with a TS barrel.
+    mkdirSync(join(root, 'components', 'button'), { recursive: true });
+    writeFileSync(join(root, 'components', 'index.ts'), "export { Button } from './button';\n");
+    writeFileSync(join(root, 'components', 'button', 'index.ts'), 'export const Button = () => null;\n');
+    // MUI shape: a package whose barrel is index.js only.
+    mkdirSync(join(root, 'packages', 'mat', 'src'), { recursive: true });
+    writeFileSync(join(root, 'packages', 'mat', 'src', 'index.js'), "export { Chip } from './Chip';\nexport { Grid } from './Grid';\n");
+    writeFileSync(join(root, 'packages', 'mat', 'src', 'Chip.js'), 'export const Chip = () => null;\n');
+    writeFileSync(join(root, 'packages', 'mat', 'src', 'Grid.js'), 'export const Grid = () => null;\n');
+    const rels = probeComponentsSrcCandidates(root, 5).map((c) => `${c.relDir}:${c.exportCount}`);
+    assert.deepEqual(rels, ['packages/mat/src:2', 'components:1']);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

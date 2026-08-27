@@ -5,6 +5,15 @@
 // default, and a description. When no catalog is available at all for a
 // docgen-strategy system, scores docgen preconditions instead (partial
 // credit — we know extraction *could* work, just haven't proven it did).
+//
+// Coverage is computed over each export's OWN props only (exp.props) —
+// props whose declaration lives outside the system's componentsSrc tree
+// (styled-system spreads, polymorphic factory types, DOM intersections) are
+// recorded name-only in exp.inheritedProps and deliberately excluded from
+// the coverage math: docgen never sees a type/description/default for those
+// (they're not the system's documentation to begin with), so folding them
+// in would just dilute a real coverage number with an unfixable one. The
+// inherited count is still reported below, informationally.
 
 import type { SystemConfig, SystemId } from '../../types.ts';
 import type { AuditCheckResult, AuditDirs, AuditFinding } from '../types.ts';
@@ -19,6 +28,19 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   const findings: AuditFinding[] = [];
   const load = await loadCatalogForAudit(system, cfg, dirs.catalogsDir);
 
+  if (load.source === 'empty-extract') {
+    // A snapshot with zero exports is the harness failing to walk the repo
+    // layout, not a measured property of the system. Withholding the score
+    // (instead of the docgen-preconditions partial credit, whose "tsconfig
+    // present, N tsx files" would look deceptively healthy here) keeps an
+    // unsupported layout from reading as a bad design system.
+    findings.push({
+      severity: 'warn',
+      message: 'Extraction produced an EMPTY catalog (0 exports). This is almost certainly an unsupported repo layout (e.g. package-specifier re-exports across workspace packages), not evidence about the system. Score withheld.',
+      fix: 'Point componentsSrc at a barrel the extractor can walk (relative re-exports), or re-run extract after fixing the layout mismatch.',
+    });
+    return { id: 'catalog-quality', title: 'Catalog quality', score: null, findings };
+  }
   if (!load.catalog) {
     if (load.source === 'none-docgen' && load.docgenPreconditions) {
       const { tsconfigExists, tsxComponentCount } = load.docgenPreconditions;
@@ -51,16 +73,26 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   let propsWithType = 0;
   let propsWithDefault = 0;
   let propsWithDescription = 0;
+  let totalInheritedProps = 0;
+  let allInheritedExportCount = 0;
   const zeroPropExportNames: string[] = [];
 
   for (const comp of catalog.components) {
     for (const exp of comp.exports) {
       totalExports += 1;
-      if (exp.props.length > 0) {
+      const inheritedCount = exp.inheritedProps?.length ?? 0;
+      // "Has a props table" means extraction produced usable prop knowledge:
+      // own metadata or at least inherited names. An export with ONLY
+      // inherited props (a pure style-prop/factory component) is not an
+      // extraction gap, so it neither counts as zero-prop nor feeds the
+      // extraction-suspect ratio; it is tallied separately below.
+      if (exp.props.length > 0 || inheritedCount > 0) {
         exportsWithProps += 1;
+        if (exp.props.length === 0) allInheritedExportCount += 1;
       } else {
         zeroPropExportNames.push(exp.displayName);
       }
+      totalInheritedProps += inheritedCount;
       // The prop-coverage counters below are scoped to non-zero-prop exports
       // by construction (an empty props array contributes nothing), which is
       // what makes them a real "of the props we did get" measure once
@@ -89,7 +121,10 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
 
   findings.push({
     severity: 'info',
-    message: `${catalog.components.length} component dirs, ${totalExports} exports, ${totalProps} props documented.`,
+    message:
+      `${catalog.components.length} component dirs, ${totalExports} exports, ${totalProps} props documented` +
+      (totalInheritedProps > 0 ? `, ${totalInheritedProps} inherited prop names recorded (not counted toward coverage)` : '') +
+      (allInheritedExportCount > 0 ? `, ${allInheritedExportCount} export(s) expose only inherited props.` : '.'),
   });
 
   if (zeroPropExportNames.length > 0) {

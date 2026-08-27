@@ -7,7 +7,7 @@
 import { readFileSync, readdirSync, type Dirent } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CatalogExport, CatalogProp, SystemCatalog, SystemConfig, SystemId } from '../types.ts';
-import { buildIndexes, collectBarrelExports, gitCommit, hashPaths, mergeBarrelExports } from './normalize.ts';
+import { buildIndexes, collectBarrelExports, gitCommit, hashPaths, mergeBarrelExports, resolveBarrelPath } from './normalize.ts';
 
 interface JsonCatalogProp {
   name: string;
@@ -122,8 +122,8 @@ export async function extractCatalogJsonCatalog(
   // re-exports more than that — foundational utilities, hooks, plus every
   // component barrel's own value + type exports. Merge the lot in with an
   // empty prop list where we don't already have real prop data.
-  const barrelPath = join(cfg.root, dirname(cfg.componentsSrc), 'index.ts');
-  mergeBarrelExports(collectBarrelExports(barrelPath), allExports, allPropsByExport);
+  const barrelPath = resolveBarrelPath(join(cfg.root, dirname(cfg.componentsSrc)));
+  if (barrelPath) mergeBarrelExports(collectBarrelExports(barrelPath), allExports, allPropsByExport);
 
   return {
     system,
