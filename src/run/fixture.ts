@@ -46,7 +46,17 @@ const SUBSTITUTED_FILES = ['vite.config.ts', 'tsconfig.json', 'index.html', 'src
 const CSS_ENTRY_PLACEHOLDER = '__CSS_ENTRY__';
 const CSS_ENTRY_PLACEHOLDER_LINE = `import '${CSS_ENTRY_PLACEHOLDER}';\n`;
 
-const npmInstallArgs = (extra: string[] = []) => ['install', ...extra, '--cache', NPM_CACHE_DIR, '--no-fund', '--no-audit'];
+const PUBLIC_NPM_REGISTRY = 'https://registry.npmjs.org/';
+const npmInstallArgs = (extra: string[] = []) => [
+  'install',
+  ...extra,
+  '--registry',
+  PUBLIC_NPM_REGISTRY,
+  '--cache',
+  NPM_CACHE_DIR,
+  '--no-fund',
+  '--no-audit',
+];
 
 /**
  * The system's fixture template dir. 'npm' consume mode always resolves to its
