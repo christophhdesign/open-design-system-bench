@@ -31,7 +31,14 @@ import { extractCatalogJsonCatalog } from '../extract/catalog-json.ts';
 import { findTsconfigUpward } from '../extract/normalize.ts';
 import { walkFiles } from './fs-walk.ts';
 
-export type CatalogSource = 'pre-extracted' | 'catalog-json-live' | 'none-catalog-json' | 'none-docgen';
+/**
+ * 'empty-extract' means a snapshot exists but holds zero exports — almost
+ * always the harness failing to walk an unsupported repo layout (field test:
+ * Radix's aggregate package re-exports via package specifiers, which the
+ * extractor never follows), NOT evidence about the system. Checks must treat
+ * it as unmeasured-with-a-loud-warning, never score it as a bad catalog.
+ */
+export type CatalogSource = 'pre-extracted' | 'empty-extract' | 'catalog-json-live' | 'none-catalog-json' | 'none-docgen';
 
 export interface DocgenPreconditions {
   tsconfigExists: boolean;
@@ -60,6 +67,9 @@ export async function loadCatalogForAudit(
   if (existsSync(preExtracted)) {
     try {
       const catalog = JSON.parse(readFileSync(preExtracted, 'utf8')) as SystemCatalog;
+      if (catalog.allExports.length === 0 && catalog.components.length === 0) {
+        return { catalog: null, source: 'empty-extract' };
+      }
       return { catalog, source: 'pre-extracted' };
     } catch {
       // fall through — treat as if no snapshot existed

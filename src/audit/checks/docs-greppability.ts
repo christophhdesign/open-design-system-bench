@@ -77,6 +77,12 @@ export async function checkDocsGreppability(system: SystemId, cfg: SystemConfig,
   const load = await loadCatalogForAudit(system, cfg, dirs.catalogsDir);
 
   if (!load.catalog) {
+    if (load.source === 'empty-extract') {
+      findings.push({
+        severity: 'warn',
+        message: 'Extraction produced an empty catalog (unsupported repo layout) — falling back to markdown-volume mode; per-component coverage is unmeasured, not zero.',
+      });
+    }
     if (mdFiles.length === 0) {
       findings.push({ severity: 'fail', message: 'No catalog and no markdown files found. Docs are not greppable at all.' });
       return { id: 'docs-greppability', title: 'Docs greppability', score: 0, findings };

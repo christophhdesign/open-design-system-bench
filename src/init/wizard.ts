@@ -17,6 +17,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { paths } from '../config.ts';
+import { collectBarrelExports } from '../extract/normalize.ts';
 import type { SystemConfig, SystemId, SystemsConfig } from '../types.ts';
 
 // ---------------------------------------------------------------------------
@@ -78,6 +79,135 @@ const DEFAULT_AGENTS_MD = ['AGENTS.md', 'README.md'];
 // something runnable immediately; the full ten stay the package's own
 // reference suite.
 const STARTER_TASK_IDS = ['confirm-account-deletion', 'success-feedback', 'settings-toggle-section'];
+
+// ---------------------------------------------------------------------------
+// componentsSrc candidate probing (Phase 2 item 2.5)
+// ---------------------------------------------------------------------------
+//
+// Field report: onboarding a monorepo design system (Chakra, Mantine, ...)
+// meant reverse-engineering the docgen barrel walker by hand to find
+// componentsSrc — e.g. packages/react/src for Chakra, or
+// packages/@mantine/core/src for Mantine, buried a few levels under repo
+// root. Scan the usual monorepo shapes ourselves and rank what's found by
+// how many public value exports the barrel actually resolves, so the wizard
+// can suggest a default instead of making the operator guess.
+
+// Directory globs probed for a componentsSrc candidate. Order here only
+// affects scan cost on a huge repo, not the result — every match gets
+// counted and the whole set is sorted by exportCount afterwards. A bare "*"
+// segment expands to every immediate subdir; "@*" expands to scoped-package
+// dirs only (e.g. @mantine).
+// 'packages/*/*/src' covers category-grouped monorepos (Radix keeps its
+// aggregate package at packages/react/radix-ui/src, two levels deep).
+// 'components' covers root-level component dirs (Ant Design keeps its
+// library at <root>/components with its own barrel).
+const COMPONENTS_SRC_CANDIDATE_PATTERNS = ['src', 'components', 'packages/*/src', 'packages/@*/*/src', 'packages/*/*/src', 'apps/*/src', 'lib'];
+
+// Immediate subdirectories of absDir, skipping node_modules and dot-dirs. An
+// "@"-scoped package dir like "@mantine" doesn't start with a dot, so it's
+// never filtered out here — it's the "@*" pattern segment that decides
+// whether it's a match. Never throws: a missing/unreadable dir just
+// contributes no candidates.
+function listSubdirs(absDir: string): string[] {
+  let entries;
+  try {
+    entries = readdirSync(absDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')).map((e) => e.name);
+}
+
+// Expands one glob pattern (segments separated by "/", at most one "*" per
+// segment) against the filesystem rooted at `root`, returning every match as
+// a root-relative path. Non-glob segments are appended literally without
+// checking they exist on disk — existence is only checked once, by the
+// caller, via the index.ts(x) probe below.
+function expandPattern(root: string, pattern: string): string[] {
+  let relDirs = [''];
+  for (const segment of pattern.split('/')) {
+    const starAt = segment.indexOf('*');
+    if (starAt === -1) {
+      relDirs = relDirs.map((rel) => (rel ? join(rel, segment) : segment));
+      continue;
+    }
+    const prefix = segment.slice(0, starAt);
+    const suffix = segment.slice(starAt + 1);
+    const next: string[] = [];
+    for (const rel of relDirs) {
+      for (const name of listSubdirs(join(root, rel))) {
+        if (name.startsWith(prefix) && name.endsWith(suffix)) next.push(rel ? join(rel, name) : name);
+      }
+    }
+    relDirs = next;
+  }
+  return relDirs;
+}
+
+/** The barrel entry file for a candidate componentsSrc dir, or undefined if it has none. Accepts the same flavors the extractor does (resolveBarrelPath order), so a JS-source barrel like MUI's index.js still ranks. */
+function resolveBarrelEntry(root: string, relDir: string): string | undefined {
+  for (const name of ['index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.d.ts']) {
+    const candidate = join(root, relDir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Scans the usual monorepo shapes under `root` for a componentsSrc
+ * candidate, and ranks each one found by how many public value exports its
+ * barrel resolves via collectBarrelExports — the same walker `extract`
+ * uses, so the count reflects what a real extraction run would see. A
+ * candidate whose barrel fails to parse must not crash the wizard, so the
+ * per-candidate call is wrapped defensively: it just scores 0, same as a
+ * barrel that genuinely exports nothing (unlike the extract path, where a
+ * parse failure is a real problem worth surfacing, here it's just a
+ * disqualified guess among several).
+ *
+ * Returns the top `limit` candidates by exportCount descending, dropping
+ * zero-count ones — unless every candidate scored 0, in which case they're
+ * all returned (still capped at `limit`) so the operator at least sees what
+ * was scanned.
+ */
+export function probeComponentsSrcCandidates(root: string, limit = 5): Array<{ relDir: string; exportCount: number }> {
+  const seen = new Map<string, number>();
+  for (const pattern of COMPONENTS_SRC_CANDIDATE_PATTERNS) {
+    for (const relDir of expandPattern(root, pattern)) {
+      if (seen.has(relDir)) continue;
+      const entryFile = resolveBarrelEntry(root, relDir);
+      if (!entryFile) continue;
+      let exportCount = 0;
+      try {
+        exportCount = collectBarrelExports(entryFile).filter((e) => e.kind === 'value').length;
+      } catch {
+        exportCount = 0; // a candidate whose barrel fails to parse just scores 0 — never crash the wizard
+      }
+      seen.set(relDir, exportCount);
+    }
+  }
+
+  const candidates = [...seen.entries()]
+    .map(([relDir, exportCount]) => ({ relDir, exportCount }))
+    .sort((a, b) => b.exportCount - a.exportCount);
+  const nonZero = candidates.filter((c) => c.exportCount > 0);
+  return (nonZero.length > 0 ? nonZero : candidates).slice(0, limit);
+}
+
+/**
+ * Non-interactive componentsSrc default: only auto-picks when there is a
+ * single, unambiguous, nonzero candidate. With more than one candidate, or
+ * none, the operator has to say so explicitly — non-interactive mode has no
+ * prompt to fall back on, unlike the interactive path's hint-and-default.
+ */
+function probeSingleComponentsSrcCandidate(root: string | undefined): string | undefined {
+  if (!root || !existsSync(root)) return undefined;
+  const candidates = probeComponentsSrcCandidates(root).filter((c) => c.exportCount > 0);
+  if (candidates.length !== 1) return undefined;
+  console.log(
+    `init: componentsSrc not set — probe found exactly one candidate, using "${candidates[0].relDir}" (${candidates[0].exportCount} exports)`,
+  );
+  return candidates[0].relDir;
+}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -153,7 +283,19 @@ async function gatherInteractive(preset: Partial<InitAnswers> | undefined, cwd: 
       root = await ask(rl, 'Repo root for docs/context files (optional)', preset?.root ?? cwd);
     } else {
       root = await ask(rl, 'Design system repo root (absolute path)', preset?.root ?? '');
-      componentsSrc = await ask(rl, 'Components source dir (relative to root)', preset?.componentsSrc ?? 'src/components');
+      const srcCandidates = root && existsSync(root) ? probeComponentsSrcCandidates(root) : [];
+      if (srcCandidates.length > 0) {
+        console.log('Scanning for componentsSrc candidates...');
+        for (const c of srcCandidates) {
+          console.log(`  found: ${c.relDir} (${c.exportCount} exports)`);
+        }
+      }
+      const topCandidate = srcCandidates.find((c) => c.exportCount > 0);
+      componentsSrc = await ask(
+        rl,
+        'Components source dir (relative to root)',
+        preset?.componentsSrc ?? topCandidate?.relDir ?? 'src/components',
+      );
     }
 
     const cssEntry = await ask(rl, 'CSS entry import specifier (optional, blank to skip)', preset?.cssEntry ?? '');
@@ -229,13 +371,15 @@ function requireAnswers(preset: Partial<InitAnswers> | undefined, cwd: string): 
     throw new Error('init: answers.consume must be "npm" or "source" in non-interactive mode');
   }
 
+  const root = preset.root ?? (preset.consume === 'npm' ? cwd : undefined);
+
   return {
     systemId: preset.systemId,
     displayName: preset.displayName,
     consume: preset.consume,
     packageSpec: preset.packageSpec,
-    root: preset.root ?? (preset.consume === 'npm' ? cwd : undefined),
-    componentsSrc: preset.componentsSrc,
+    root,
+    componentsSrc: preset.componentsSrc ?? probeSingleComponentsSrcCandidate(root),
     componentsPkg: preset.componentsPkg,
     foundationsPkg: preset.foundationsPkg,
     foundationsCss: preset.foundationsCss,
