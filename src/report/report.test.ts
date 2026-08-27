@@ -2,8 +2,9 @@
 // disk except the two demo HTML files written at the end, for a human to open.
 
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type {
@@ -21,11 +22,6 @@ import { buildRunResults, GATE_RANK } from './aggregate.ts';
 import { renderCompareHtml } from './compare.ts';
 import { ciCheck, type CiOptions } from './ci.ts';
 import { renderReportHtml } from './html.ts';
-
-const DEMO_REPORT_PATH =
-  '/private/tmp/claude-501/-Users-christophhellmuth-Downloads-Development-design-engineering-innovation/7de21c1f-1da7-4627-aeb7-a62f79c6903b/scratchpad/demo-report.html';
-const DEMO_COMPARE_PATH =
-  '/private/tmp/claude-501/-Users-christophhellmuth-Downloads-Development-design-engineering-innovation/7de21c1f-1da7-4627-aeb7-a62f79c6903b/scratchpad/demo-compare.html';
 
 // ---------------------------------------------------------------------------
 // Fixture builders
@@ -574,7 +570,11 @@ test('writes demo-report.html and demo-compare.html for manual review', () => {
     assert.ok(!compareHtml.includes(pattern));
   }
 
-  mkdirSync(dirname(DEMO_REPORT_PATH), { recursive: true });
-  writeFileSync(DEMO_REPORT_PATH, reportHtml, 'utf8');
-  writeFileSync(DEMO_COMPARE_PATH, compareHtml, 'utf8');
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-report-'));
+  const reportPath = join(dir, 'demo-report.html');
+  const comparePath = join(dir, 'demo-compare.html');
+  writeFileSync(reportPath, reportHtml, 'utf8');
+  writeFileSync(comparePath, compareHtml, 'utf8');
+  console.log(`demo report: ${reportPath}`);
+  console.log(`demo compare: ${comparePath}`);
 });
