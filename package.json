@@ -19,7 +19,7 @@
     "compare": "tsx src/cli.ts compare",
     "ci": "tsx src/cli.ts ci",
     "prune": "tsx src/cli.ts prune",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
