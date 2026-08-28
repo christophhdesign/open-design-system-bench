@@ -43,6 +43,8 @@ export interface InitAnswers {
   foundationsCss?: string;
   /** Import specifier for the system's stylesheet in npm mode's fixture (e.g. "@acme/ui/styles.css"). */
   cssEntry?: string;
+  /** Base URL of the system's hosted docs site, e.g. "https://mantine.dev". Optional in either mode; enables the audit's opt-in hosted-surface probes. Blank/omitted means a fully offline audit. */
+  docsUrl?: string;
   /** Files copied at context level "agents-md", relative to root. Default ["AGENTS.md", "README.md"]. Literal paths — see the doctor check for why these aren't real globs. */
   agentsMd?: string[];
   /** Skill bundle dirs injected at context level "skill", relative to root. */
@@ -299,6 +301,7 @@ async function gatherInteractive(preset: Partial<InitAnswers> | undefined, cwd: 
     }
 
     const cssEntry = await ask(rl, 'CSS entry import specifier (optional, blank to skip)', preset?.cssEntry ?? '');
+    const docsUrl = await ask(rl, 'Hosted docs site base URL, for opt-in llms.txt/registry probes (optional, blank to skip)', preset?.docsUrl ?? '');
     const agentsMdRaw = await ask(
       rl,
       'Docs files for the "agents-md" context level (comma-separated)',
@@ -325,6 +328,7 @@ async function gatherInteractive(preset: Partial<InitAnswers> | undefined, cwd: 
       root: root || undefined,
       componentsSrc,
       cssEntry: cssEntry || undefined,
+      docsUrl: docsUrl || undefined,
       agentsMd: splitList(agentsMdRaw),
       skillDirs: splitList(skillDirsRaw),
       catalogStrategy,
@@ -384,6 +388,7 @@ function requireAnswers(preset: Partial<InitAnswers> | undefined, cwd: string): 
     foundationsPkg: preset.foundationsPkg,
     foundationsCss: preset.foundationsCss,
     cssEntry: preset.cssEntry,
+    docsUrl: preset.docsUrl,
     agentsMd: preset.agentsMd?.length ? preset.agentsMd : DEFAULT_AGENTS_MD,
     skillDirs: preset.skillDirs,
     catalogStrategy: preset.catalogStrategy ?? (preset.consume === 'npm' ? 'none' : 'docgen'),
@@ -465,6 +470,7 @@ function buildSystemConfig(answers: InitAnswers, cwd: string): SystemConfig {
     if (answers.packageSpec) cfg.packageSpec = answers.packageSpec;
   }
   if (answers.cssEntry) cfg.cssEntry = answers.cssEntry;
+  if (answers.docsUrl) cfg.docsUrl = answers.docsUrl;
 
   return cfg;
 }

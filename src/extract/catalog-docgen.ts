@@ -58,10 +58,21 @@ interface BarrelDirEntry {
   dir: string;
   /**
    * Names explicitly re-exported from the root barrel
-   * (`export { X } from './dir'`), PascalCase values only. undefined when the
-   * dir came from `export * from './dir'` — the dir's own module decides then.
+   * (`export { X } from './dir'`), PascalCase values only.
    */
   explicitNames?: string[];
+  /**
+   * True when an `export * from './dir'` names this dir: its module's own
+   * export list governs IN ADDITION to any explicitNames. The two are not
+   * redundant: `export { default as Accordion } from './Accordion'` next to
+   * `export * from './Accordion'` (the MUI shape) puts the public PascalCase
+   * name only in the parent's alias — the module's own list has just
+   * `default` and camelCase helpers, so discarding explicitNames when the
+   * export * resolves silently drops the component (field test: MUI fell
+   * from 128 dirs to 12 the day the js resolver made those targets
+   * resolvable).
+   */
+  broadened?: boolean;
 }
 
 /** True when `absPath` is inside (or equal to) `root` — the boundary a followed re-export must stay within. */
@@ -95,6 +106,14 @@ function resolveReexportTarget(baseDir: string, spec: string): ReexportTarget | 
       { path: `${abs}.ts`, isFileModule: true },
       { path: `${abs}.tsx`, isFileModule: true },
       { path: `${abs}.mts`, isFileModule: true },
+      // JS-source systems (MUI ships src as .js + .d.ts): tried after the TS
+      // flavors so TypeScript source always wins when both exist. Without
+      // these, a dir holding only an index.js is silently skipped (field
+      // test: four MUI export * targets like './Zoom' were lost).
+      { path: join(abs, 'index.js'), isFileModule: false },
+      { path: join(abs, 'index.jsx'), isFileModule: false },
+      { path: `${abs}.js`, isFileModule: true },
+      { path: `${abs}.jsx`, isFileModule: true },
     ];
     for (const candidate of candidates) {
       try {
@@ -178,15 +197,21 @@ function collectBarrelDirs(
       byDir.set(entry.dir, entry);
       return;
     }
-    if (!existing.explicitNames) return; // export * already governs this dir
-    if (entry.explicitNames) existing.explicitNames.push(...entry.explicitNames);
-    else existing.explicitNames = undefined; // export * broadens to the module's own export list
+    // Union, never discard: explicit names may be parent-side default
+    // aliases the module's own export list cannot contain (see
+    // BarrelDirEntry.broadened), and export * broadening is tracked as a
+    // flag alongside them rather than replacing them.
+    if (entry.broadened) existing.broadened = true;
+    if (entry.explicitNames) {
+      if (existing.explicitNames) existing.explicitNames.push(...entry.explicitNames);
+      else existing.explicitNames = [...entry.explicitNames];
+    }
   };
 
   // dir string relative to srcDir for a resolved target — may start with
   // '../' when the target lives outside srcDir but inside root.
   const dirFor = (target: ReexportTarget): string =>
-    target.isFileModule ? relative(srcDir, target.path.replace(/\.(tsx|ts|mts)$/, '')) : relative(srcDir, dirname(target.path));
+    target.isFileModule ? relative(srcDir, target.path.replace(/\.(tsx|ts|mts|jsx|js)$/, '')) : relative(srcDir, dirname(target.path));
 
   for (const node of ast.program.body) {
     if (node.type === 'ExportAllDeclaration') {
@@ -202,7 +227,7 @@ function collectBarrelDirs(
         for (const nested of collectBarrelDirs(target.path, srcDir, root, visited)) add(nested);
         continue;
       }
-      add({ dir: dirFor(target) });
+      add({ dir: dirFor(target), broadened: true });
       continue;
     }
 
@@ -534,13 +559,17 @@ export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig):
   // directly instead of scanning a component directory for entry files.
   const fileModuleEntries = new Map<string, string>();
   const publicNames = new Set<string>();
-  for (const { dir, explicitNames } of barrelDirs) {
+  for (const { dir, explicitNames, broadened } of barrelDirs) {
     const target = resolveReexportTarget(srcDir, dir);
     if (!target && !explicitNames) {
       console.warn(`[extract:${system}] could not resolve re-export target for './${dir}' — skipping`);
       continue;
     }
-    const names = explicitNames ? [...new Set(explicitNames)] : collectPublicComponentNames(target!.path);
+    // A broadened dir owns its module's export list PLUS any parent-side
+    // aliases; an explicit-only dir is exactly its alias list; a bare
+    // export * dir is exactly its module's list.
+    const moduleNames = broadened || !explicitNames ? (target ? collectPublicComponentNames(target.path) : []) : [];
+    const names = [...new Set([...moduleNames, ...(explicitNames ?? [])])];
     dirToNames.set(dir, names);
     for (const n of names) publicNames.add(n);
     if (target?.isFileModule && target.path.endsWith('.tsx')) fileModuleEntries.set(dir, target.path);

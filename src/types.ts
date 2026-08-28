@@ -111,6 +111,14 @@ export interface SystemConfig {
    * Tailwind-only via className, etc.). Ignored in 'source' mode.
    */
   cssEntry?: string;
+  /**
+   * Base URL of the system's hosted docs site (e.g. "https://mantine.dev").
+   * Enables the audit's opt-in hosted-surface probes (llms.txt,
+   * llms-full.txt, /mcp/index.json, /registry.json served from the live
+   * site rather than committed to the repo). Omit for a fully offline
+   * audit: without this set, `audit` never touches the network.
+   */
+  docsUrl?: string;
 }
 
 export type SystemsConfig = Record<SystemId, SystemConfig>;

@@ -30,17 +30,22 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
   --tasks-dir <path>            path to a task suite dir (default: bench.config.json's
                                 defaults.tasksDir, else ./tasks)
 
-  doctor                      verify environment (systems, catalogs, claude CLI, fixtures)
-  audit [--system <id>] [--run <dir>] [--json] [--verbose]
-                              Tier-0 static audit (no LLM, no network): the seven-check
-                              enablement/catalog/vocabulary/token/deprecation/docs scan plus
-                              the AI-Readiness Score. Defaults to every configured system.
-                              --run <dir> adds the four behavioral sub-scores (Lift, Ceiling,
-                              Engagement, Vocabulary-behavioral) computed from that run's
-                              results.json; without it they report n/a. --json emits the full
-                              structure instead of the human-readable report.
+  doctor                      verify environment (systems, catalogs, claude CLI, fixtures);
+                              also HEAD-probes each configured docsUrl (5s timeout) when set
+  audit [--system <id>] [--run <dir>] [--json] [--verbose] [--offline]
+                              Tier-0 static audit: the seven-check enablement/catalog/
+                              vocabulary/token/deprecation/docs scan plus the AI-Readiness
+                              Score. No LLM ever. No network EITHER, unless a system
+                              configures "docsUrl" — then hosted-surface probes (llms.txt,
+                              llms-full.txt, /mcp/index.json, /registry.json) run against it
+                              too, opt-in. --offline skips those probes even when docsUrl is
+                              set, forcing a fully offline run. Defaults to every configured
+                              system. --run <dir> adds the four behavioral sub-scores (Lift,
+                              Ceiling, Engagement, Vocabulary-behavioral) computed from that
+                              run's results.json; without it they report n/a. --json emits
+                              the full structure instead of the human-readable report.
   init [--non-interactive --id <systemId> --consume npm|source --package <spec>
-       --root <dir> --components-src <path> --css-entry <specifier>]
+       --root <dir> --components-src <path> --css-entry <specifier> --docs-url <url>]
                               set up a system in systems.config.json (interactive by default);
                               scaffolds starter tasks when tasks/ is empty
   extract [--allow-stale] [--systems a,b]
@@ -132,8 +137,9 @@ async function cmdAudit(opts: {
   runDirArg?: string;
   json: boolean;
   verbose: boolean;
+  offline: boolean;
 }): Promise<number> {
-  const { runAuditChecks } = await import('./audit/run.ts');
+  const { runAuditChecks, resolveHostedSurface } = await import('./audit/run.ts');
   const { computeAuditScore } = await import('./audit/score.ts');
 
   const systemsConfigPath = resolveSystemsConfigPath(opts.configPathArg);
@@ -177,9 +183,15 @@ async function cmdAudit(opts: {
   const report: Record<string, unknown> = { systemsConfigPath, run: opts.runDirArg ?? null, systems: {} as Record<string, unknown> };
   for (const system of targetSystems) {
     const cfg = systems[system];
-    const checks = await runAuditChecks(system, cfg, { catalogsDir, tokensDir });
+    // Resolved once here (not inside runAuditChecks a second time — passing
+    // it through dirs.hosted below means runAuditChecks reuses this exact
+    // result instead of re-probing) so the JSON report can carry it too.
+    // `hosted` is additive: src/report/leaderboard.ts only reads
+    // `checks`/`score` from this shape, so this can't break its parsing.
+    const hosted = await resolveHostedSurface(cfg, opts.offline);
+    const checks = await runAuditChecks(system, cfg, { catalogsDir, tokensDir, hosted }, opts.offline);
     const score = computeAuditScore(checks, run, system);
-    (report.systems as Record<string, unknown>)[system] = { checks, score };
+    (report.systems as Record<string, unknown>)[system] = { checks, score, hosted };
     if (!opts.json) printAuditHuman(system, checks, score, opts.verbose);
   }
 
@@ -189,6 +201,27 @@ async function cmdAudit(opts: {
     console.log('');
   }
   return 0; // informational — the `ci` command is the gate, not this one
+}
+
+/**
+ * One HEAD request to a system's docsUrl, 5s timeout — a cheap "is the
+ * hosted docs host even up" sanity check, distinct from (and much cheaper
+ * than) the four-path hosted-surface probe `audit` does (see hosted.ts).
+ * Any actual HTTP response (even a non-2xx one) counts as reachable: this
+ * is checking network reachability of the docs host, not the presence of
+ * any specific asset on it.
+ */
+async function probeDocsUrlHead(docsUrl: string, timeoutMs = 5000): Promise<{ reachable: boolean; status?: number; error?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(docsUrl, { method: 'HEAD', signal: controller.signal });
+    return { reachable: true, status: res.status };
+  } catch (err) {
+    return { reachable: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function cmdDoctor(configPathArg: string | undefined, tasksDirArg: string | undefined): Promise<number> {
@@ -247,6 +280,19 @@ async function cmdDoctor(configPathArg: string | undefined, tasksDirArg: string 
     const { templateDir } = await import('./run/fixture.ts');
     if (!existsSync(join(templateDir(system, cfg), 'node_modules'))) {
       warnings.push(`${system}: fixture template not installed yet (auto-installs on first run)`);
+    }
+
+    if (cfg.docsUrl) {
+      const probe = await probeDocsUrlHead(cfg.docsUrl);
+      if (probe.reachable) {
+        okLines.push(`${system}: docsUrl reachable (${cfg.docsUrl}, HTTP ${probe.status})`);
+      } else {
+        warnings.push(
+          `${system}: docsUrl not reachable (${cfg.docsUrl}): ${probe.error} — \`audit\`'s hosted-surface probes will report unmeasured, not absent, until this resolves`,
+        );
+      }
+    } else {
+      okLines.push(`${system}: no docsUrl configured — audit's hosted-surface probes stay disabled (fully offline)`);
     }
   }
 
@@ -340,6 +386,7 @@ async function main(): Promise<number> {
       root: { type: 'string' },
       'components-src': { type: 'string' },
       'css-entry': { type: 'string' },
+      'docs-url': { type: 'string' },
       'allow-stale': { type: 'boolean' },
       systems: { type: 'string' },
       contexts: { type: 'string' },
@@ -370,6 +417,7 @@ async function main(): Promise<number> {
       system: { type: 'string' },
       json: { type: 'boolean' },
       verbose: { type: 'boolean' },
+      offline: { type: 'boolean' },
     },
   });
 
@@ -394,6 +442,7 @@ async function main(): Promise<number> {
           ...(values.root ? { root: values.root } : {}),
           ...(values['components-src'] ? { componentsSrc: values['components-src'] } : {}),
           ...(values['css-entry'] ? { cssEntry: values['css-entry'] } : {}),
+          ...(values['docs-url'] ? { docsUrl: values['docs-url'] } : {}),
         },
       });
       console.log(summary);
@@ -408,6 +457,7 @@ async function main(): Promise<number> {
         runDirArg: values.run,
         json: values.json ?? false,
         verbose: values.verbose ?? false,
+        offline: values.offline ?? false,
       });
 
     case 'extract': {

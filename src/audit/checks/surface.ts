@@ -69,8 +69,24 @@
 // Phase-4 weight re-slice — it's evidence of *how* the system was built,
 // not evidence available to an agent consuming it, so folding it into this
 // score right now would conflate two different things the survey measures.
+//
+// Hosted-surface addition (P3): the checks above are repo-only and miss any
+// of this evidence a system serves ONLY from its hosted docs site instead of
+// committing to the repo (Chakra serves llms.txt slices from route
+// handlers; Mantine hosts a 43 KB llms.txt index, a 4.2 MB llms-full.txt,
+// and a 164-entry /mcp/index.json — none of that is a file a repo walk can
+// find). When a system configures `docsUrl`, run.ts probes a small fixed
+// path set once per system (src/audit/hosted.ts) and threads the result in
+// via `dirs.hosted`; this check folds a 'found' hosted /llms.txt into the
+// existing llms.txt signal, folds a 'found' hosted /registry.json or
+// /mcp/index.json into the existing registry hint, and adds an unscored
+// context-cost disclosure (size of every llms artifact seen, local or
+// hosted) plus an unscored probe-state finding. No docsUrl configured means
+// `dirs.hosted` is undefined and every one of these branches degrades to
+// its pre-P3 behavior, byte for byte — the audit stays fully offline unless
+// an operator explicitly opts a system in.
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { SystemConfig, SystemId } from '../../types.ts';
@@ -221,6 +237,17 @@ function editorRulesEvidence(root: string): string | undefined {
   return hit ? hit.split(sep).join('/') : undefined;
 }
 
+/**
+ * First hosted probe matching `path` (e.g. "/llms.txt"), or undefined when
+ * hosted probing didn't run at all (no docsUrl configured, or --offline)
+ * or ran but didn't include that path. `hosted` is AuditDirs.hosted —
+ * see its doc comment in types.ts for the three-state contract.
+ */
+function findHostedProbe(hosted: AuditDirs['hosted'], path: string) {
+  if (!hosted || hosted === 'offline') return undefined;
+  return hosted.probes.find((p) => p.path === path);
+}
+
 /** Which registry hint exists at the local (root or components-package) scope (for naming in the finding), or undefined if none do. */
 function registryEvidence(root: string, componentsPkgDir: string, pkg: PkgJson | undefined): string | undefined {
   if (existsSync(join(root, 'registry.json'))) return 'registry.json at system root';
@@ -296,17 +323,86 @@ export async function checkSurface(system: SystemId, cfg: SystemConfig, dirs: Au
   }
 
   // --- llms.txt (15) ---
+  // Present = a local root file OR (docsUrl configured and probed) a found
+  // hosted /llms.txt. The absence warn only fires when NEITHER is true — a
+  // hosted probe that merely came back 'unreachable' (timeout, network
+  // error) is unmeasured, not evidence of absence, and must never trip it
+  // on its own (see the probe-state findings below, which name it instead).
   const llmsTxtPath = join(root, 'llms.txt');
   const hasLlmsTxt = existsSync(llmsTxtPath);
+  const hostedLlmsTxtProbe = findHostedProbe(dirs.hosted, '/llms.txt');
   if (hasLlmsTxt) {
     score += 15;
     findings.push({ severity: 'info', message: 'llms.txt present at system root.' });
+  } else if (hostedLlmsTxtProbe?.status === 'found') {
+    score += 15;
+    findings.push({ severity: 'info', message: `llms.txt found at hosted docs URL: ${hostedLlmsTxtProbe.url}.` });
+  } else if (hostedLlmsTxtProbe?.status === 'unreachable') {
+    // Unmeasured, not absent — no finding here; the probe-state block below
+    // names it. Scoring nothing is still correct: we simply don't know.
   } else {
+    // Neither local nor a measured hosted signal: hosted 'absent' (404/410),
+    // or hosted probing never ran at all (no docsUrl / --offline), both
+    // land here. The wording only claims to have checked the hosted site
+    // when hosted probing actually ran, so a fully offline audit reads
+    // byte-identical to before P3.
     findings.push({
       severity: 'warn',
-      message: 'No llms.txt at the system root.',
+      message: `No llms.txt at the system root${dirs.hosted && dirs.hosted !== 'offline' ? ' or hosted docs site' : ''}.`,
       fix: 'Ship an llms.txt listing the component set: the most commonly cited gap in the mid-2026 AI-readiness survey.',
     });
+  }
+
+  // --- 3.3 context-cost signal (info + optional warn; never changes score) ---
+  // Every llms artifact actually seen — local file, or a hosted probe that
+  // came back 'found' — gets its size disclosed. "It exists" says nothing
+  // about whether an agent can afford to load it: Mantine's real
+  // llms-full.txt is 4.2 MB, and no repo-only audit before this could ever
+  // see that number (a hosted docs site is under no obligation to also
+  // commit the file to the repo).
+  const LLMS_ARTIFACT_WARN_BYTES = 1024 * 1024; // 1 MB
+  const formatArtifactSize = (bytes: number): string =>
+    bytes >= 1024 * 1024 ? `${round1(bytes / (1024 * 1024))} MB` : `${round1(bytes / 1024)} KB`;
+  const reportLlmsArtifactSize = (label: string, bytes: number): void => {
+    findings.push({ severity: 'info', message: `${label} is ${formatArtifactSize(bytes)}.` });
+    if (bytes > LLMS_ARTIFACT_WARN_BYTES) {
+      findings.push({
+        severity: 'warn',
+        message: `llms artifact exceeds practical context budgets (${formatArtifactSize(bytes)}): agents cannot load it whole; ship an index-sized llms.txt and chunk the rest.`,
+      });
+    }
+  };
+  for (const name of ['llms.txt', 'llms-full.txt']) {
+    const artifactPath = join(root, name);
+    if (!existsSync(artifactPath)) continue;
+    try {
+      reportLlmsArtifactSize(`${name} (local)`, statSync(artifactPath).size);
+    } catch {
+      // existsSync raced with a delete, or a permissions error — skip
+      // silently, same defensive-read stance as the rest of this check.
+    }
+  }
+  if (dirs.hosted && dirs.hosted !== 'offline') {
+    for (const probe of dirs.hosted.probes) {
+      if ((probe.path === '/llms.txt' || probe.path === '/llms-full.txt') && probe.status === 'found' && probe.bytes !== undefined) {
+        reportLlmsArtifactSize(`${probe.path.slice(1)} (hosted ${probe.url})`, probe.bytes);
+      }
+    }
+  }
+
+  // --- hosted probe state (once per system; informational, no score) ---
+  if (!cfg.docsUrl) {
+    findings.push({ severity: 'info', message: 'Hosted surface not probed (no docsUrl configured).' });
+  } else if (dirs.hosted === 'offline') {
+    findings.push({ severity: 'info', message: 'Hosted probes skipped (--offline).' });
+  } else if (dirs.hosted) {
+    const unreachable = dirs.hosted.probes.filter((p) => p.status === 'unreachable');
+    if (unreachable.length > 0) {
+      findings.push({
+        severity: 'info',
+        message: `Hosted probe(s) unreachable, treated as unmeasured (not absent): ${unreachable.map((p) => p.path).join(', ')}.`,
+      });
+    }
   }
 
   // --- machine catalog (20) ---
@@ -413,14 +509,28 @@ export async function checkSurface(system: SystemId, cfg: SystemConfig, dirs: Au
   }
 
   // --- registry hint (5) ---
+  // Hosted evidence (docsUrl configured) adds two more sources beyond the
+  // local/workspace ones: a served /registry.json, or a served
+  // /mcp/index.json (Mantine ships exactly this: a 164-entry MCP index that
+  // doubles as a registry-shaped component list). When docsUrl isn't
+  // configured (or --offline was passed) both hosted lookups are undefined,
+  // so this falls through to the pre-P3 local-only behavior unchanged.
   const localRegistryEvidence = registryEvidence(root, componentsPkgDir, pkg);
   const workspaceRegistryHit = localRegistryEvidence ? undefined : findWorkspaceRegistryHint(workspacePkgs);
+  const hostedRegistryProbe = findHostedProbe(dirs.hosted, '/registry.json');
+  const hostedMcpIndexProbe = findHostedProbe(dirs.hosted, '/mcp/index.json');
   if (localRegistryEvidence) {
     score += 5;
     findings.push({ severity: 'info', message: `Registry hint found: ${localRegistryEvidence}.` });
   } else if (workspaceRegistryHit) {
     score += 5;
     findings.push({ severity: 'info', message: `Registry hint found: registry.json in workspace package ${workspaceRegistryHit.relDir}.` });
+  } else if (hostedRegistryProbe?.status === 'found') {
+    score += 5;
+    findings.push({ severity: 'info', message: `Registry hint found: hosted ${hostedRegistryProbe.url}.` });
+  } else if (hostedMcpIndexProbe?.status === 'found') {
+    score += 5;
+    findings.push({ severity: 'info', message: `Registry hint found: hosted ${hostedMcpIndexProbe.url}.` });
   } else {
     findings.push({ severity: 'info', message: 'No registry hint found (registry.json, publishConfig.registry).' });
   }

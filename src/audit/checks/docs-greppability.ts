@@ -13,6 +13,20 @@
 // volume mode pre-extract vs 23.8 in coverage mode post-extract on identical
 // docs: a system with a broken/missing catalog looked *better* than one
 // with real, measured coverage). The fallback is therefore capped at 40.
+//
+// Hosted-surface addition (P3): the with-catalog mode's llms.txt coverage
+// term used to see only a local root llms.txt. When there is no local file
+// but a hosted /llms.txt probe (see src/audit/hosted.ts, threaded in via
+// dirs.hosted) came back 'found' with its text captured, coverage is
+// computed over that text instead. A hosted llms.txt that's known to exist
+// but whose text wasn't captured (body over the probe's 1 MB capture limit,
+// --offline, or the probe itself was unreachable) is a third state — not
+// absent, not measured — and must be handled as neither: no "No llms.txt
+// found" warn (the asset may well exist), and no coverage credit either
+// (nobody read it). That state drops the llms term's weight out of the
+// score entirely and renormalizes across the remaining terms, the same
+// "skipped weight is redistributed, never counted as zero" principle
+// score.ts's Surface sub-score already applies to whole checks.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -97,7 +111,19 @@ export async function checkDocsGreppability(system: SystemId, cfg: SystemConfig,
       severity: 'info',
       message: 'No catalog available: scoring markdown volume only (capped at 40), not per-component coverage. This mode is not comparable to the with-catalog coverage score.',
     });
-    if (!hasLlmsTxt) findings.push({ severity: 'warn', message: 'No llms.txt found.' });
+    if (!hasLlmsTxt) {
+      // Consult the hosted probe before warning: a system with no repo-side
+      // llms.txt may still host one (or be unprobed/unreachable, which is
+      // unmeasured, not absent).
+      const hostedLlms = dirs.hosted && dirs.hosted !== 'offline' ? dirs.hosted.probes.find((pr) => pr.path === '/llms.txt') : undefined;
+      if (hostedLlms?.status === 'found') {
+        findings.push({ severity: 'info', message: `Hosted llms.txt found at ${hostedLlms.url} (no repo-side copy).` });
+      } else if (dirs.hosted === 'offline' || hostedLlms?.status === 'unreachable') {
+        findings.push({ severity: 'info', message: 'llms.txt not in the repo; hosted state unmeasured (offline or unreachable).' });
+      } else {
+        findings.push({ severity: 'warn', message: 'No llms.txt found.' });
+      }
+    }
     return { id: 'docs-greppability', title: 'Docs greppability', score: round1(score), findings };
   }
 
@@ -121,12 +147,49 @@ export async function checkDocsGreppability(system: SystemId, cfg: SystemConfig,
     });
   }
 
+  // llms.txt coverage: local file wins when present (pre-P3 behavior,
+  // unchanged). Absent locally, a hosted /llms.txt probe stands in only if
+  // it carried captured text (dirs.hosted is undefined whenever docsUrl
+  // isn't configured or --offline was passed, so hostedLlmsProbe is
+  // undefined then too — every hosted-based branch below is unreachable in
+  // that case, and behavior degrades to exactly the pre-P3 two-way branch).
+  const hostedLlmsProbe = dirs.hosted && dirs.hosted !== 'offline' ? dirs.hosted.probes.find((p) => p.path === '/llms.txt') : undefined;
+  const hostedLlmsText = hostedLlmsProbe?.status === 'found' ? hostedLlmsProbe.text : undefined;
+
   let llmsCoveredPct = 0;
+  let llmsTermMeasured = true;
   if (hasLlmsTxt) {
     const llmsCovered = uniqueNames.filter((name) => llmsTxtContent.includes(name));
     llmsCoveredPct = uniqueNames.length > 0 ? (llmsCovered.length / uniqueNames.length) * 100 : 0;
     findings.push({ severity: llmsCoveredPct < 50 ? 'warn' : 'info', message: `llms.txt lists ${llmsCovered.length}/${uniqueNames.length} components (${round1(llmsCoveredPct)}%).` });
+  } else if (hostedLlmsText !== undefined) {
+    const llmsCovered = uniqueNames.filter((name) => hostedLlmsText.includes(name));
+    llmsCoveredPct = uniqueNames.length > 0 ? (llmsCovered.length / uniqueNames.length) * 100 : 0;
+    findings.push({
+      severity: llmsCoveredPct < 50 ? 'warn' : 'info',
+      message: `Hosted llms.txt (${hostedLlmsProbe!.url}) lists ${llmsCovered.length}/${uniqueNames.length} components (${round1(llmsCoveredPct)}%).`,
+    });
+  } else if (hostedLlmsProbe?.status === 'found') {
+    // Confirmed to exist, but its body exceeded the probe's 1 MB capture
+    // limit so no text was returned to check names against. Present, but
+    // coverage is not computable — never award coverage points for content
+    // nobody read, and never claim absence for an asset known to exist.
+    llmsTermMeasured = false;
+    findings.push({
+      severity: 'info',
+      message: `Hosted llms.txt found at ${hostedLlmsProbe.url} but its content was too large to fetch for coverage checking — coverage unmeasured, not counted against the score.`,
+    });
+  } else if (hostedLlmsProbe?.status === 'unreachable') {
+    // The probe itself timed out or errored: we don't know whether the
+    // asset exists at all, so this is unmeasured too, not absence.
+    llmsTermMeasured = false;
+    findings.push({
+      severity: 'info',
+      message: `Hosted llms.txt probe at ${hostedLlmsProbe.url} was unreachable — coverage unmeasured, not counted against the score.`,
+    });
   } else {
+    // No local file, and no hosted signal at all (hosted 'absent', or
+    // hosted probing never ran — no docsUrl / --offline): genuine absence.
     findings.push({ severity: 'warn', message: 'No llms.txt found. Component list is not machine-listable in the ecosystem-standard location.' });
   }
 
@@ -134,8 +197,17 @@ export async function checkDocsGreppability(system: SystemId, cfg: SystemConfig,
   // coverage is a stronger, more agent-specific signal so it's weighted
   // higher per point (30) than its lower ceiling suggests; "docs exist at
   // all" gets a flat 10 so a system with partial coverage never scores
-  // identically to one with none.
-  const score = (mdFiles.length > 0 ? 10 : 0) + pctCovered * 0.6 + (hasLlmsTxt ? llmsCoveredPct * 0.3 : 0);
+  // identically to one with none. When the llms term is unmeasured (see
+  // above), its weight is excluded from the denominator too — rescaled
+  // across the remaining measured terms — rather than scored as 0.
+  const terms: Array<{ weight: number; value: number; measured: boolean }> = [
+    { weight: 10, value: mdFiles.length > 0 ? 100 : 0, measured: true },
+    { weight: 60, value: pctCovered, measured: true },
+    { weight: 30, value: llmsCoveredPct, measured: llmsTermMeasured },
+  ];
+  const measuredTerms = terms.filter((t) => t.measured);
+  const totalWeight = measuredTerms.reduce((sum, t) => sum + t.weight, 0);
+  const score = totalWeight === 0 ? 0 : measuredTerms.reduce((sum, t) => sum + t.weight * t.value, 0) / totalWeight;
 
   return { id: 'docs-greppability', title: 'Docs greppability', score: round1(clamp(score, 0, 100)), findings };
 }
