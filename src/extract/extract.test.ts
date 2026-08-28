@@ -454,3 +454,39 @@ test('docgen extraction throws an actionable error when no barrel entry point ex
     },
   );
 });
+
+test('export * into a dir holding only an index.js resolves (the four skipped MUI targets)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-js-dir-index-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Zoom'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/js-dir-index' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', allowJs: true } }));
+
+  writeFileSync(join(src, 'index.ts'), "export * from './Zoom';\n");
+  // The target dir has ONLY a JS barrel (MUI's src layout).
+  writeFileSync(join(src, 'Zoom', 'index.js'), "export { Zoom } from './Zoom.js';\n");
+  writeFileSync(join(src, 'Zoom', 'Zoom.js'), 'export const Zoom = () => null;\n');
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  assert.ok(catalog.allExports.includes('Zoom'), `Zoom missing from allExports: ${JSON.stringify(catalog.allExports)}`);
+  assert.ok(catalog.components.some((c) => c.exports.some((e) => e.displayName === 'Zoom')), 'Zoom missing from components[]');
+});
+
+test('a parent-side default alias survives next to a resolvable export * (the MUI pairing)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-alias-pair-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Accordion'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/alias-pair' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', allowJs: true } }));
+
+  // Root pairs a default alias with an export * of the same dir; the dir's
+  // own module exports only `default` and a camelCase helper, so the public
+  // PascalCase name exists ONLY in the parent's alias.
+  writeFileSync(join(src, 'index.ts'), "export { default as Accordion } from './Accordion';\nexport * from './Accordion';\n");
+  writeFileSync(join(src, 'Accordion', 'index.tsx'), "export { default } from './Accordion.js';\nexport const accordionClasses = { root: 'x' };\n");
+  writeFileSync(join(src, 'Accordion', 'Accordion.tsx'), 'const Accordion = () => <div />;\nexport default Accordion;\n');
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  const names = catalog.components.flatMap((c) => c.exports.map((e) => e.displayName));
+  assert.ok(names.includes('Accordion'), `parent-side alias lost: ${JSON.stringify(names)}`);
+});

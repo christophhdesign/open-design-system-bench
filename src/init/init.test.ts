@@ -313,6 +313,37 @@ test('runInit respects an explicit componentsPkg/foundationsPkg override', async
   }
 });
 
+test('runInit persists docsUrl when given', async () => {
+  const cwd = tmpCwd('odsys-init-docsurl-');
+  try {
+    const result = await runInit({
+      nonInteractive: true,
+      cwd,
+      answers: { systemId: 'acme', consume: 'npm', packageSpec: '@acme/ui', docsUrl: 'https://acme.dev/docs' },
+    });
+    const written = JSON.parse(readFileSync(result.configPath, 'utf8')) as SystemsConfigFileShape;
+    assert.equal(written.systems.acme.docsUrl, 'https://acme.dev/docs');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('runInit omits docsUrl from systems.config.json when not given', async () => {
+  const cwd = tmpCwd('odsys-init-nodocsurl-');
+  try {
+    const result = await runInit({
+      nonInteractive: true,
+      cwd,
+      answers: { systemId: 'acme', consume: 'npm', packageSpec: '@acme/ui' },
+    });
+    const written = JSON.parse(readFileSync(result.configPath, 'utf8')) as SystemsConfigFileShape;
+    assert.equal(written.systems.acme.docsUrl, undefined);
+    assert.ok(!('docsUrl' in written.systems.acme), 'docsUrl must be omitted, not written as undefined/blank');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('runInit round-trips a catalog-json strategy with catalogFile', async () => {
   const repo = tmpCwd('odsys-source-repo-catjson-');
   const cwd = tmpCwd('odsys-init-catjson-');

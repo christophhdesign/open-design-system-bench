@@ -4,11 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
 
 import type { RunManifest, RunResults, SystemCatalog, SystemConfig } from '../types.ts';
 import { catalogPath } from '../config.ts';
 import { buildRunResults } from '../report/aggregate.ts';
-import { AUDIT_CHECKS, runAuditChecks } from './run.ts';
+import { AUDIT_CHECKS, resolveHostedSurface, runAuditChecks } from './run.ts';
 import { computeAuditScore } from './score.ts';
 import { checkExportHygiene } from './checks/export-hygiene.ts';
 import { checkVocabulary } from './checks/vocabulary.ts';
@@ -18,6 +19,7 @@ import { checkDocsGreppability } from './checks/docs-greppability.ts';
 import { checkCatalogQuality } from './checks/catalog-quality.ts';
 import { checkDeprecation } from './checks/deprecation.ts';
 import { listWorkspacePackages } from './workspace.ts';
+import { probeHostedSurface } from './hosted.ts';
 
 function writeFile(path: string, content: string): void {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -1143,6 +1145,210 @@ test('deprecation accepts a CHANGELOG.en-US.md root variant (Ant Design shape) a
     const finding = result.findings.find((f) => f.message.includes('CHANGELOG.en-US.md'));
     assert.ok(finding, `expected a finding naming CHANGELOG.en-US.md, got: ${JSON.stringify(result.findings)}`);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// P3: opt-in hosted-surface probes (docsUrl) — offline by default, network
+// only ever touched via a local node:http server on 127.0.0.1.
+// ---------------------------------------------------------------------------
+
+interface RouteSpec {
+  status: number;
+  body?: string;
+  contentType?: string;
+}
+
+/** node:http server on 127.0.0.1 serving fixed routes; also counts every request it receives, for the "offline means zero network" assertion. */
+async function startRouteServer(routes: Record<string, RouteSpec>): Promise<{ baseUrl: string; server: Server; requestCount: () => number }> {
+  let count = 0;
+  const server = createServer((req, res) => {
+    count++;
+    const route = req.url ? routes[req.url] : undefined;
+    if (!route) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(route.status, route.contentType ? { 'content-type': route.contentType } : undefined);
+    res.end(route.body ?? '');
+  });
+  await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('mock server did not bind to a port');
+  return { baseUrl: `http://127.0.0.1:${address.port}`, server, requestCount: () => count };
+}
+
+function stopServer(server: Server): Promise<void> {
+  return new Promise((resolvePromise) => server.close(() => resolvePromise()));
+}
+
+test('surface awards llms.txt via hosted URL evidence when there is no local file', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  const { baseUrl, server } = await startRouteServer({
+    '/llms.txt': { status: 200, body: '# Testkit\n\n- Toggle\n- Stack\n' },
+  });
+  try {
+    cfg.docsUrl = baseUrl;
+    const hosted = await probeHostedSurface(baseUrl);
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir, hosted });
+    const evidence = result.findings.find((f) => f.message.includes('llms.txt found at hosted docs URL'));
+    assert.ok(evidence, `expected hosted llms.txt evidence, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(evidence!.message.includes(`${baseUrl}/llms.txt`), `evidence must name the URL, got: ${evidence!.message}`);
+    assert.ok(
+      !result.findings.some((f) => f.severity === 'warn' && f.message.startsWith('No llms.txt')),
+      'must not also warn about absence once hosted evidence was found',
+    );
+  } finally {
+    await stopServer(server);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface warns when a hosted llms artifact exceeds the 1 MB practical context budget', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  const bigBody = `# Testkit\n${'x'.repeat(1_200_000)}`;
+  const { baseUrl, server } = await startRouteServer({
+    '/llms.txt': { status: 200, body: bigBody },
+  });
+  try {
+    cfg.docsUrl = baseUrl;
+    const hosted = await probeHostedSurface(baseUrl);
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir, hosted });
+    const budgetWarn = result.findings.find((f) => f.severity === 'warn' && f.message.startsWith('llms artifact exceeds practical context budgets'));
+    assert.ok(budgetWarn, `expected the context-budget warn, got: ${JSON.stringify(result.findings)}`);
+    const sizeInfo = result.findings.find((f) => f.message.includes('llms.txt (hosted') && f.message.includes('MB'));
+    assert.ok(sizeInfo, `expected an info finding naming the hosted llms.txt size in MB, got: ${JSON.stringify(result.findings)}`);
+  } finally {
+    await stopServer(server);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface credits a registry hint found only via hosted /mcp/index.json, naming the URL', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  const { baseUrl, server } = await startRouteServer({
+    '/mcp/index.json': { status: 200, body: JSON.stringify({ entries: [{ name: 'Toggle' }] }), contentType: 'application/json' },
+  });
+  try {
+    cfg.docsUrl = baseUrl;
+    const hosted = await probeHostedSurface(baseUrl);
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir, hosted });
+    const evidence = result.findings.find((f) => f.message.includes('Registry hint found: hosted'));
+    assert.ok(evidence, `expected a hosted registry-hint finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(evidence!.message.includes(`${baseUrl}/mcp/index.json`), `evidence must name the URL, got: ${evidence!.message}`);
+  } finally {
+    await stopServer(server);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('audit --offline (offline=true passed to runAuditChecks) skips hosted probing entirely: zero network hits, and surface reports the skip', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  const { baseUrl, server, requestCount } = await startRouteServer({
+    '/llms.txt': { status: 200, body: 'irrelevant — must never be fetched' },
+  });
+  try {
+    cfg.docsUrl = baseUrl;
+    const checks = await runAuditChecks(system, cfg, { catalogsDir, tokensDir }, true);
+    assert.equal(requestCount(), 0, 'offline mode must never touch the network');
+    const surface = checks.find((c) => c.id === 'surface')!;
+    assert.ok(
+      surface.findings.some((f) => f.severity === 'info' && f.message === 'Hosted probes skipped (--offline).'),
+      `expected the offline-skip info finding, got: ${JSON.stringify(surface.findings)}`,
+    );
+  } finally {
+    await stopServer(server);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('surface with no docsUrl configured is byte-identical to pre-P3 behavior (plain absence warn, not-probed info, no score change)', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  try {
+    assert.equal(cfg.docsUrl, undefined);
+    const result = await checkSurface(system, cfg, { catalogsDir, tokensDir });
+    assert.ok(
+      result.findings.some((f) => f.severity === 'warn' && f.message === 'No llms.txt at the system root.'),
+      `expected the plain (pre-P3) absence warn with no "or hosted docs site" suffix, got: ${JSON.stringify(result.findings)}`,
+    );
+    assert.ok(
+      result.findings.some((f) => f.severity === 'info' && f.message === 'Hosted surface not probed (no docsUrl configured).'),
+      `expected the not-probed info finding, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveHostedSurface: undefined without docsUrl (regardless of offline), "offline" string when the flag is set, a real probe otherwise', async () => {
+  const { cfg, root } = buildSyntheticSystem();
+  try {
+    assert.equal(cfg.docsUrl, undefined);
+    assert.equal(await resolveHostedSurface(cfg, false), undefined);
+    assert.equal(await resolveHostedSurface(cfg, true), undefined, 'no docsUrl means offline is moot — still undefined');
+
+    const { baseUrl, server } = await startRouteServer({ '/llms.txt': { status: 200, body: 'ok' } });
+    try {
+      cfg.docsUrl = baseUrl;
+      assert.equal(await resolveHostedSurface(cfg, true), 'offline');
+      const hosted = await resolveHostedSurface(cfg, false);
+      assert.ok(hosted && typeof hosted === 'object' && hosted.docsUrl === baseUrl, `expected a real HostedSurface, got: ${JSON.stringify(hosted)}`);
+    } finally {
+      await stopServer(server);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('docs-greppability computes llms.txt coverage from a hosted probe when there is no local file', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  const { baseUrl, server } = await startRouteServer({
+    '/llms.txt': { status: 200, body: '# Testkit\n\n- Toggle\n' }, // names Toggle only, not Stack
+  });
+  try {
+    cfg.docsUrl = baseUrl;
+    const hosted = await probeHostedSurface(baseUrl);
+    const result = await checkDocsGreppability(system, cfg, { catalogsDir, tokensDir, hosted });
+    const evidence = result.findings.find((f) => f.message.startsWith('Hosted llms.txt ('));
+    assert.ok(evidence, `expected a hosted-llms-coverage finding, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(evidence!.message.includes('1/2 components (50%)'), `expected 1/2 coverage, got: ${evidence!.message}`);
+    assert.equal(result.score, 55, `expected 10 (docs exist) + 0.6*50 (md coverage) + 0.3*50 (llms coverage) = 55, got ${result.score}`);
+  } finally {
+    await stopServer(server);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('docs-greppability treats a hosted llms.txt too large to read as unmeasured, not absent, and renormalizes the score', async () => {
+  const { cfg, catalogsDir, tokensDir, system, root } = buildSyntheticSystem();
+  const bigBody = `# Testkit\n${'x'.repeat(1_200_000)}`;
+  const { baseUrl, server } = await startRouteServer({
+    '/llms.txt': { status: 200, body: bigBody },
+  });
+  try {
+    cfg.docsUrl = baseUrl;
+    const hosted = await probeHostedSurface(baseUrl);
+    // Sanity check on the fixture: text must NOT have been captured (over the 1 MB probe capture limit) — otherwise this test isn't exercising the unmeasured path.
+    const llmsProbe = hosted.probes.find((p) => p.path === '/llms.txt');
+    assert.equal(llmsProbe?.status, 'found');
+    assert.equal(llmsProbe?.text, undefined);
+
+    const result = await checkDocsGreppability(system, cfg, { catalogsDir, tokensDir, hosted });
+    assert.ok(
+      !result.findings.some((f) => f.severity === 'warn' && f.message.startsWith('No llms.txt found')),
+      `must not claim absence for a hosted llms.txt known to exist, got: ${JSON.stringify(result.findings)}`,
+    );
+    assert.ok(
+      result.findings.some((f) => f.severity === 'info' && f.message.includes('coverage unmeasured')),
+      `expected an unmeasured-coverage info finding, got: ${JSON.stringify(result.findings)}`,
+    );
+    // Renormalized over the two measured terms only: (10*100 + 60*50) / 70 = 57.1428... -> 57.1
+    assert.equal(result.score, 57.1, `expected the llms term's weight excluded and renormalized, got ${result.score}`);
+  } finally {
+    await stopServer(server);
     rmSync(root, { recursive: true, force: true });
   }
 });
