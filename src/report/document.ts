@@ -266,6 +266,7 @@ export function scanProseNumbers(content: string, startLine: number, sectionNumb
     line = line.replace(/`[^`]*`/g, ' ');                       // inline code
     line = line.replace(/\]\([^)]*\)/g, '] ');                  // link targets
     line = line.replace(/^#{1,6}\s+[\dA-Z]+(?:\.\d+)*\.?\s*/, ''); // heading numbering
+    line = line.replace(/^\s*\d+[.)]\s+/, ' ');                 // ordered-list markers
     line = line.replace(/§\s*\d+(?:\.\d+)*/g, ' ');             // section references
     line = line.replace(/\bsections?\s+\d+(?:\.\d+)*/gi, ' ');  // "section 5.1"
     line = line.replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ');         // ISO dates

@@ -320,6 +320,19 @@ test('scanProseNumbers treats a dotted number as a claim unless it is a real sec
   );
 });
 
+test('scanProseNumbers ignores ordered-list markers', () => {
+  // Recommendations and validity limits are numbered lists, so every report has
+  // these. Reading "4." as a claim made the gate fire on its own formatting.
+  const hits = scanProseNumbers(
+    ['1. First item.', '2. Second item.', '  10) A nested item.', '4. Scored 64.1 on that check.'].join('\n'),
+    1,
+  );
+  assert.deepEqual(
+    hits.map((h) => h.value),
+    [64.1],
+  );
+});
+
 test('scanProseNumbers reads thousands separators as one number', () => {
   const hits = scanProseNumbers('It produced 1,234 lines.', 1);
   assert.deepEqual(
