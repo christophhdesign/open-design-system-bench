@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/open-design-system-bench/schema/report.schema.json",
   "title": "AI-readiness report front matter",
-  "description": "The machine-readable YAML front matter of an AI-readiness report (reports/<systemId>/<date>-<profile>.report.md). This is an index, not the report: headline numbers plus a structured list of finding and recommendation ids. The prose body below the front matter carries the writing. Never emitted as a standalone .json file. Validate with: tsx src/cli.ts report --validate <file.md>",
+  "description": "The machine-readable YAML front matter of an AI-readiness report (docs/reports/<systemId>/<date>-<profile>.report.md). This is an index, not the report: headline numbers plus a structured list of finding and recommendation ids. The prose body below the front matter carries the writing. Never emitted as a standalone .json file. Validate with: tsx src/cli.ts report --validate <file.md>",
   "type": "object",
   "additionalProperties": false,
   "required": [

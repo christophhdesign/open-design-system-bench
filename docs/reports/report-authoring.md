@@ -25,12 +25,12 @@ real). They never dictate the conclusion.
 # 1. Compute everything. --since is optional but strongly preferred: it carries
 #    finding ids forward, which is what makes history work.
 npx tsx src/cli.ts report --stats --run runs/<run-id> --system <system-id> \
-  --since reports/<system-id>/<previous>.report.md
+  --since docs/reports/<system-id>/<previous>.report.md
 
-# 2. Write the report to reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md
+# 2. Write the report to docs/reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md
 
 # 3. Check it. Loop until it exits 0.
-npx tsx src/cli.ts report --validate reports/<system-id>/<date>-<profile>.report.md
+npx tsx src/cli.ts report --validate docs/reports/<system-id>/<date>-<profile>.report.md
 ```
 
 `--stats` prints four things: the computed front matter, the generated sections, the coverage list,
@@ -69,7 +69,7 @@ heading. Sections marked generated are pasted from `--stats` and must byte-match
 Give each finding its own sub-heading under section 5, numbered `5.1`, `5.2` and so on, and set the
 finding's `section` field to match. Generated sections may not carry sub-headings.
 
-[`docs/report-example.md`](report-example.md) is a complete worked example on a synthetic system.
+[`report-example.md`](report-example.md) is a complete worked example on a synthetic system.
 
 ## Numbers
 
@@ -200,7 +200,7 @@ composite entirely.
 Recommended layout, and worth committing so the history is in git:
 
 ```
-reports/
+docs/reports/
   my-system/
     2026-01-01-medium.report.md
     2026-04-01-full.report.md

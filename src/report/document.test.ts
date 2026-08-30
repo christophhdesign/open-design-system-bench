@@ -1,4 +1,4 @@
-// Full-gate validation of docs/report-example.md against the committed fixture
+// Full-gate validation of docs/reports/report-example.md against the committed
 // run, plus one negative case per gate.
 //
 // The example is generated from src/report/__fixtures__/example-run.json by
@@ -26,7 +26,7 @@ import { buildGeneratedFrontMatter, buildReportStats } from './stats.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
-const EXAMPLE = join(REPO_ROOT, 'docs', 'report-example.md');
+const EXAMPLE = join(REPO_ROOT, 'docs', 'reports', 'report-example.md');
 
 function fixtureContext(): ValidateContext {
   const fx = JSON.parse(readFileSync(join(HERE, '__fixtures__', 'example-run.json'), 'utf8'));

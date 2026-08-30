@@ -1,4 +1,4 @@
-// Regenerates docs/report-example.md from the committed fixture run, so the
+// Regenerates docs/reports/report-example.md from the committed fixture run, so
 // example's generated sections are byte-exact by construction.
 //
 // Run from the repo root when document.test.ts reports a G3 mismatch on the
@@ -7,7 +7,7 @@
 //   npx tsx src/report/__fixtures__/build-example.ts
 //
 // The prose below is the example's interpretation layer. Edit it here, not in
-// docs/report-example.md, or the next regeneration will overwrite it.
+// docs/reports/report-example.md, or the next regeneration will overwrite it.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dump } from 'js-yaml';
@@ -292,6 +292,6 @@ for (const section of REPORT_OUTLINE) {
   lines.push(body, '');
 }
 
-const out = join(process.cwd(), 'docs', 'report-example.md');
+const out = join(process.cwd(), 'docs', 'reports', 'report-example.md');
 writeFileSync(out, `${lines.join('\n').replace(/\n+$/, '')}\n`);
 console.log('wrote', out);

@@ -51,3 +51,9 @@ fixtures/appkit-app/
 
 # Local Claude Code settings (the checked-in skill under .claude/skills/ is intentional)
 .claude/settings.local.json
+
+# Generated AI-readiness reports, one dir per design system under test. Like
+# runs/, these are output about YOUR system rather than about this tool, so they
+# stay local. The reference docs alongside them (README, report-authoring,
+# report-example) are tracked.
+docs/reports/*/

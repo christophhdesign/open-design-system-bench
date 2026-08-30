@@ -5,7 +5,7 @@ description: Write an AI-readiness report from a completed open-design-system-be
 
 # Writing an AI-readiness report
 
-Read [`docs/report-authoring.md`](../../../docs/report-authoring.md) first. It is the contract, and
+Read [`docs/reports/report-authoring.md`](../../../docs/reports/report-authoring.md) first. It is the contract, and
 it is the source of truth for everything below. This file only sequences the work.
 
 ## The rule that governs everything
@@ -20,7 +20,7 @@ numbers is yours, and is expected to differ from what another author would write
 
 ```bash
 npx tsx src/cli.ts report --stats --run runs/<run-id> --system <system-id> \
-  --since reports/<system-id>/<most-recent>.report.md
+  --since docs/reports/<system-id>/<most-recent>.report.md
 ```
 
 Omit `--since` only when this is the system's first report. It carries finding ids forward, which is
@@ -34,7 +34,7 @@ A finding written from the leads list alone will name the symptom and miss the c
 starting points, not conclusions. Note also that the leads deliberately do not tell you what to
 conclude: deciding an item is not a real defect is a legitimate finding, provided you say so.
 
-**3. Write** `reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md`.
+**3. Write** `docs/reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md`.
 
 - Front matter: paste the computed block from `--stats`, then add `reportId`, `generatedAt`,
   `title`, `author`, `subject`, `harness`, `methodology.deviations`, `citedFigures`, `findings`,
@@ -50,7 +50,7 @@ conclude: deciding an item is not a real defect is a legitimate finding, provide
 **4. Validate, and loop until clean.**
 
 ```bash
-npx tsx src/cli.ts report --validate reports/<system-id>/<date>-<profile>.report.md
+npx tsx src/cli.ts report --validate docs/reports/<system-id>/<date>-<profile>.report.md
 ```
 
 Exit 0 means done. Fix what it names and run it again.

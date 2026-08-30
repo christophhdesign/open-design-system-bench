@@ -86,7 +86,7 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
                               sections must byte-match a re-render, every number in the prose
                               must trace to computed data or a declared citedFigure, every
                               finding must cite real evidence, and every hard failure must be
-                              addressed. Exit 1 on any violation. See docs/report-authoring.md.
+                              addressed. Exit 1 on any violation. See docs/reports/report-authoring.md.
   compare <runDir...> [--out <file>]
                               side-by-side compare of N runs
   leaderboard <auditJson...> [--out <file>]

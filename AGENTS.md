@@ -123,7 +123,9 @@ src/report/              aggregate, html, compare, leaderboard, ci, shared; writ
 src/audit/               7 Tier-0 checks, score assembly, convention-lexicon.json
 src/init/                wizard
 schema/                  report.schema.json - the written-report front-matter contract
-docs/                    report-authoring.md (the contract in prose), report-example.md
+docs/reports/            README, report-authoring.md (the contract in prose),
+                         report-example.md; generated per-system reports land
+                         here and are gitignored
 .claude/skills/          ds-bench-report: drives the report-authoring agent
 ROADMAP.md               the plan: phase status, next tasks, eval catalog (internal, not
                          part of the shipped repo)

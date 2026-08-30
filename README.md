@@ -227,12 +227,12 @@ machine-comparable over time.
 
 ```bash
 # 1. compute every number the report needs
-npx tsx src/cli.ts report --stats --run runs/<id> --system <system-id>   --since reports/<system-id>/<previous>.report.md
+npx tsx src/cli.ts report --stats --run runs/<id> --system <system-id>   --since docs/reports/<system-id>/<previous>.report.md
 
-# 2. write reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md
+# 2. write docs/reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md
 
 # 3. check it
-npx tsx src/cli.ts report --validate reports/<system-id>/<date>-<profile>.report.md
+npx tsx src/cli.ts report --validate docs/reports/<system-id>/<date>-<profile>.report.md
 ```
 
 Reports are written by an agent. The split that makes them trustworthy:
@@ -257,8 +257,8 @@ prints the previous report's ids for reuse. Two reports are numerically comparab
 
 Commit `reports/` and the history lives in git.
 
-- [`docs/report-authoring.md`](docs/report-authoring.md) is the full contract.
-- [`docs/report-example.md`](docs/report-example.md) is a complete worked example.
+- [`docs/reports/report-authoring.md`](docs/reports/report-authoring.md) is the full contract.
+- [`docs/reports/report-example.md`](docs/reports/report-example.md) is a complete worked example.
 - `.claude/skills/ds-bench-report/` drives the authoring agent in Claude Code.
 
 ## Benchmarks & CI
