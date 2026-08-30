@@ -48,3 +48,6 @@ nexos-models.json
 # which fills __COMPONENTS_PKG__ / __SYSTEM_ROOT__ from each system's config.
 fixtures/reactkit-app/
 fixtures/appkit-app/
+
+# Local Claude Code settings (the checked-in skill under .claude/skills/ is intentional)
+.claude/settings.local.json

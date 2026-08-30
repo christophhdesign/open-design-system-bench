@@ -1,0 +1,452 @@
+{
+  "manifest": {
+    "runId": "20260101-000000-example",
+    "label": "example",
+    "profile": "medium",
+    "startedAt": "2026-01-01T00:00:00.000Z",
+    "finishedAt": "2026-01-01T00:24:00.000Z",
+    "nodeVersion": "v22.0.0",
+    "adapters": {
+      "claude-code": {
+        "version": "1.0.0"
+      }
+    },
+    "systems": {
+      "my-system": {
+        "root": "/example/my-system",
+        "commit": "abc1234",
+        "catalogSrcHash": "aaa",
+        "tokensCssHash": "bbb"
+      }
+    },
+    "cells": [
+      {
+        "spec": {
+          "system": "my-system",
+          "context": "agents-md",
+          "model": "sonnet",
+          "agent": "claude-code",
+          "taskId": "data-table-pagination",
+          "rep": 1
+        },
+        "status": "ok"
+      },
+      {
+        "spec": {
+          "system": "my-system",
+          "context": "skill",
+          "model": "sonnet",
+          "agent": "claude-code",
+          "taskId": "data-table-pagination",
+          "rep": 1
+        },
+        "status": "ok"
+      },
+      {
+        "spec": {
+          "system": "my-system",
+          "context": "agents-md",
+          "model": "sonnet",
+          "agent": "claude-code",
+          "taskId": "destructive-confirmation",
+          "rep": 1
+        },
+        "status": "ok"
+      },
+      {
+        "spec": {
+          "system": "my-system",
+          "context": "skill",
+          "model": "sonnet",
+          "agent": "claude-code",
+          "taskId": "destructive-confirmation",
+          "rep": 1
+        },
+        "status": "ok"
+      }
+    ],
+    "totalCostUsd": 3.6,
+    "wallClockMs": 1440000
+  },
+  "records": [
+    {
+      "cell": {
+        "system": "my-system",
+        "context": "agents-md",
+        "model": "sonnet",
+        "agent": "claude-code"
+      },
+      "taskId": "data-table-pagination",
+      "rep": 1,
+      "status": "ok",
+      "agentMeta": {
+        "durationMs": 180000,
+        "costUsd": 0.9
+      },
+      "artifacts": {
+        "dir": "cells/my-system_agents-md_sonnet/data-table-pagination/rep1",
+        "diffPatch": "diff.patch",
+        "transcript": "transcript.jsonl"
+      },
+      "result": {
+        "overall": 100,
+        "gate": "pass",
+        "dimensions": {
+          "imports": {
+            "dimension": "imports",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "apiFidelity": {
+            "dimension": "apiFidelity",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "tokenDiscipline": {
+            "dimension": "tokenDiscipline",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "a11yStatic": {
+            "dimension": "a11yStatic",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "compile": {
+            "dimension": "compile",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "judgment": {
+            "dimension": "judgment",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          }
+        },
+        "diffs": []
+      }
+    },
+    {
+      "cell": {
+        "system": "my-system",
+        "context": "skill",
+        "model": "sonnet",
+        "agent": "claude-code"
+      },
+      "taskId": "data-table-pagination",
+      "rep": 1,
+      "status": "ok",
+      "agentMeta": {
+        "durationMs": 180000,
+        "costUsd": 0.9
+      },
+      "artifacts": {
+        "dir": "cells/my-system_skill_sonnet/data-table-pagination/rep1",
+        "diffPatch": "diff.patch",
+        "transcript": "transcript.jsonl"
+      },
+      "result": {
+        "overall": 63,
+        "gate": "fail",
+        "dimensions": {
+          "imports": {
+            "dimension": "imports",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "apiFidelity": {
+            "dimension": "apiFidelity",
+            "score": 0,
+            "gate": "fail",
+            "diffs": [
+              {
+                "dimension": "apiFidelity",
+                "message": "no design-system components used"
+              }
+            ]
+          },
+          "tokenDiscipline": {
+            "dimension": "tokenDiscipline",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "a11yStatic": {
+            "dimension": "a11yStatic",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "compile": {
+            "dimension": "compile",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "judgment": {
+            "dimension": "judgment",
+            "score": 60,
+            "gate": "pass",
+            "diffs": [
+              {
+                "dimension": "judgment",
+                "message": "system-pagination: the diff builds a local Pagination component instead of importing the one the system ships."
+              }
+            ]
+          }
+        },
+        "diffs": [
+          {
+            "dimension": "apiFidelity",
+            "message": "no design-system components used"
+          },
+          {
+            "dimension": "judgment",
+            "message": "system-pagination: the diff builds a local Pagination component instead of importing the one the system ships."
+          }
+        ]
+      }
+    },
+    {
+      "cell": {
+        "system": "my-system",
+        "context": "agents-md",
+        "model": "sonnet",
+        "agent": "claude-code"
+      },
+      "taskId": "destructive-confirmation",
+      "rep": 1,
+      "status": "ok",
+      "agentMeta": {
+        "durationMs": 180000,
+        "costUsd": 0.9
+      },
+      "artifacts": {
+        "dir": "cells/my-system_agents-md_sonnet/destructive-confirmation/rep1",
+        "diffPatch": "diff.patch",
+        "transcript": "transcript.jsonl"
+      },
+      "result": {
+        "overall": 82,
+        "gate": "review",
+        "dimensions": {
+          "imports": {
+            "dimension": "imports",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "apiFidelity": {
+            "dimension": "apiFidelity",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "tokenDiscipline": {
+            "dimension": "tokenDiscipline",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "a11yStatic": {
+            "dimension": "a11yStatic",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "compile": {
+            "dimension": "compile",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "judgment": {
+            "dimension": "judgment",
+            "score": 40,
+            "gate": "review",
+            "diffs": [
+              {
+                "dimension": "judgment",
+                "message": "action-hierarchy: all three actions render with identical emphasis, so the destructive option carries the same visual weight as the safe one."
+              }
+            ]
+          }
+        },
+        "diffs": [
+          {
+            "dimension": "judgment",
+            "message": "action-hierarchy: all three actions render with identical emphasis, so the destructive option carries the same visual weight as the safe one."
+          }
+        ]
+      }
+    },
+    {
+      "cell": {
+        "system": "my-system",
+        "context": "skill",
+        "model": "sonnet",
+        "agent": "claude-code"
+      },
+      "taskId": "destructive-confirmation",
+      "rep": 1,
+      "status": "ok",
+      "agentMeta": {
+        "durationMs": 180000,
+        "costUsd": 0.9
+      },
+      "artifacts": {
+        "dir": "cells/my-system_skill_sonnet/destructive-confirmation/rep1",
+        "diffPatch": "diff.patch",
+        "transcript": "transcript.jsonl"
+      },
+      "result": {
+        "overall": 98.5,
+        "gate": "pass",
+        "dimensions": {
+          "imports": {
+            "dimension": "imports",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "apiFidelity": {
+            "dimension": "apiFidelity",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "tokenDiscipline": {
+            "dimension": "tokenDiscipline",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "a11yStatic": {
+            "dimension": "a11yStatic",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "compile": {
+            "dimension": "compile",
+            "score": 100,
+            "gate": "pass",
+            "diffs": []
+          },
+          "judgment": {
+            "dimension": "judgment",
+            "score": 95,
+            "gate": "pass",
+            "diffs": []
+          }
+        },
+        "diffs": []
+      }
+    }
+  ],
+  "config": {
+    "root": "/example/my-system",
+    "rootEnv": "MY_SYSTEM_ROOT",
+    "componentsSrc": "packages/components/src",
+    "componentsPkg": "@example/components",
+    "foundationsPkg": "@example/tokens",
+    "foundationsCss": "packages/tokens/dist/variables.css",
+    "catalogStrategy": "docgen",
+    "consume": "source",
+    "agentContext": {
+      "agentsMd": [
+        "README.md"
+      ],
+      "skillDirs": [
+        ".claude/skills/compose-ui"
+      ]
+    }
+  },
+  "checks": [
+    {
+      "id": "surface",
+      "title": "Enablement surface",
+      "score": 35,
+      "findings": [
+        {
+          "severity": "fail",
+          "message": "No AGENTS.md or CLAUDE.md at the system root.",
+          "fix": "Add an AGENTS.md. Every guided context level starts from it."
+        },
+        {
+          "severity": "warn",
+          "message": "No llms.txt at the system root."
+        }
+      ]
+    },
+    {
+      "id": "catalog-quality",
+      "title": "Catalog quality",
+      "score": 90,
+      "findings": [
+        {
+          "severity": "info",
+          "message": "18/20 exports documented."
+        }
+      ]
+    },
+    {
+      "id": "export-hygiene",
+      "title": "Export hygiene",
+      "score": 100,
+      "findings": []
+    },
+    {
+      "id": "vocabulary",
+      "title": "Vocabulary convention-distance",
+      "score": 93,
+      "findings": [
+        {
+          "severity": "warn",
+          "message": "Component \"TextField\" (form-text-input): models invented this name 21 time(s) across the mined sample; this system covers it as \"Input\" instead."
+        }
+      ]
+    },
+    {
+      "id": "tokens",
+      "title": "Token machine-readability",
+      "score": 40,
+      "findings": [
+        {
+          "severity": "warn",
+          "message": "0/120 vars (0%) reference another var: a semantic layer over primitives."
+        },
+        {
+          "severity": "warn",
+          "message": "No light/dark theming signal found in foundationsCss."
+        }
+      ]
+    },
+    {
+      "id": "deprecation",
+      "title": "Deprecation legibility",
+      "score": 75,
+      "findings": []
+    },
+    {
+      "id": "docs-greppability",
+      "title": "Docs greppability",
+      "score": 72,
+      "findings": []
+    }
+  ],
+  "extraction": {
+    "components": 20,
+    "exports": 24,
+    "props": 96,
+    "cssVars": 120,
+    "utilities": 0
+  }
+}

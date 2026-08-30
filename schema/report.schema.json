@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/open-design-system-bench/schema/report.schema.json",
+  "title": "AI-readiness report front matter",
+  "description": "The machine-readable YAML front matter of an AI-readiness report (reports/<systemId>/<date>-<profile>.report.md). This is an index, not the report: headline numbers plus a structured list of finding and recommendation ids. The prose body below the front matter carries the writing. Never emitted as a standalone .json file. Validate with: tsx src/cli.ts report --validate <file.md>",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "reportId",
+    "generatedAt",
+    "title",
+    "author",
+    "subject",
+    "harness",
+    "provenance",
+    "methodology",
+    "results",
+    "audit",
+    "findings",
+    "recommendations",
+    "validityLimits"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this contract. Bumped only on a breaking change to the front matter shape.",
+      "const": 1
+    },
+    "reportId": {
+      "description": "Stable identifier for this report. Convention: <systemId>-<date>-<profile>.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "generatedAt": {
+      "description": "ISO date (YYYY-MM-DD) or datetime the report was written.",
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}"
+    },
+    "title": { "type": "string", "minLength": 1 },
+
+    "author": {
+      "description": "Who wrote the prose. Reports are agent-authored; recording the model matters when comparing two reports written months apart.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["agent", "human"] },
+        "model": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "subject": {
+      "description": "The design system under test.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["systemId", "displayName", "packages"],
+      "properties": {
+        "systemId": {
+          "description": "Key in systems.config.json. The join key that links this report to every other report of the same system.",
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": { "type": "string", "minLength": 1 },
+        "commit": {
+          "description": "Commit of the system repository at run time. Null when the checkout was not a git repo.",
+          "type": ["string", "null"]
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "role"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "version": { "type": ["string", "null"] },
+              "role": { "enum": ["components", "foundations", "other"] }
+            }
+          }
+        }
+      }
+    },
+
+    "harness": {
+      "description": "The benchmark itself, so a score can be attributed to a harness version.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string" },
+        "commit": { "type": ["string", "null"] }
+      }
+    },
+
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runs"],
+      "properties": {
+        "runs": {
+          "description": "Runs this report draws on. Exactly one must have role 'primary'; its numbers are the headline.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["runId", "profile", "role", "cellCount"],
+            "properties": {
+              "runId": { "type": "string", "minLength": 1 },
+              "label": { "type": "string" },
+              "profile": { "type": "string", "minLength": 1 },
+              "role": { "enum": ["primary", "supporting"] },
+              "cellCount": { "type": "integer", "minimum": 0 },
+              "startedAt": { "type": "string" },
+              "finishedAt": { "type": "string" }
+            }
+          }
+        },
+        "catalog": {
+          "description": "Extraction counts for the system under test.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["components", "exports", "props", "cssVars"],
+          "properties": {
+            "components": { "type": "integer", "minimum": 0 },
+            "exports": { "type": "integer", "minimum": 0 },
+            "props": { "type": "integer", "minimum": 0 },
+            "cssVars": { "type": "integer", "minimum": 0 },
+            "utilities": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consume", "contexts", "models", "agents", "reps", "deviations", "comparabilityKey"],
+      "properties": {
+        "consume": { "enum": ["source", "npm"] },
+        "contexts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["bare", "agents-md", "skill", "mcp"] }
+        },
+        "models": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "agents": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "reps": { "type": "integer", "minimum": 1 },
+        "judge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string" },
+            "samples": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "fixtureTemplate": { "type": "string" },
+        "deviations": {
+          "description": "Agent-written. How this run departed from the stock fixture template, and why. Empty when the stock template was used unmodified.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["change", "rationale"],
+            "properties": {
+              "change": { "type": "string", "minLength": 1 },
+              "rationale": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "comparabilityKey": {
+          "description": "Derived. Two reports may only be compared numerically when this string matches: composites computed over different profiles, context sets or fixtures are not comparable.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+
+    "results": {
+      "description": "Generated by `report --stats`. Every field is recomputed and checked by `report --validate`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cellCount",
+        "okCount",
+        "erroredCount",
+        "meanOverall",
+        "medianOverall",
+        "minOverall",
+        "maxOverall",
+        "gateCounts",
+        "perfectCells",
+        "dimensionMeans",
+        "byContext"
+      ],
+      "properties": {
+        "cellCount": { "type": "integer", "minimum": 0 },
+        "okCount": { "type": "integer", "minimum": 0 },
+        "erroredCount": { "type": "integer", "minimum": 0 },
+        "meanOverall": { "$ref": "#/$defs/score" },
+        "medianOverall": { "$ref": "#/$defs/score" },
+        "minOverall": { "$ref": "#/$defs/score" },
+        "maxOverall": { "$ref": "#/$defs/score" },
+        "gateCounts": { "$ref": "#/$defs/gateCounts" },
+        "perfectCells": { "type": "integer", "minimum": 0 },
+        "costUsd": { "type": ["number", "null"] },
+        "wallClockMs": { "type": ["number", "null"] },
+        "inputTokens": { "type": ["integer", "null"] },
+        "outputTokens": { "type": ["integer", "null"] },
+        "dimensionMeans": { "$ref": "#/$defs/dimensionMeans" },
+        "byContext": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["context", "cellCount", "meanOverall", "dimensionMeans", "gateCounts"],
+            "properties": {
+              "context": { "enum": ["bare", "agents-md", "skill", "mcp"] },
+              "cellCount": { "type": "integer", "minimum": 0 },
+              "meanOverall": { "$ref": "#/$defs/score" },
+              "dimensionMeans": { "$ref": "#/$defs/dimensionMeans" },
+              "gateCounts": { "$ref": "#/$defs/gateCounts" }
+            }
+          }
+        }
+      }
+    },
+
+    "audit": {
+      "description": "Generated. The AI-Readiness Score for this system, as computed by `audit`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basis", "composite", "tier", "axes", "surfaceChecks"],
+      "properties": {
+        "basis": { "enum": ["surface-only", "partial-behavioral", "full-behavioral"] },
+        "composite": { "$ref": "#/$defs/score" },
+        "tier": { "enum": ["Emerging", "Invested", "AI-native"] },
+        "axes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["surface", "lift", "ceiling", "engagement", "vocabularyBehavioral"],
+          "properties": {
+            "surface": { "$ref": "#/$defs/axis" },
+            "lift": { "$ref": "#/$defs/axis" },
+            "ceiling": { "$ref": "#/$defs/axis" },
+            "engagement": { "$ref": "#/$defs/axis" },
+            "vocabularyBehavioral": { "$ref": "#/$defs/axis" }
+          }
+        },
+        "surfaceChecks": {
+          "description": "Per-check score keyed by check id. Null when the check could not run.",
+          "type": "object",
+          "additionalProperties": { "type": ["number", "null"] }
+        }
+      }
+    },
+
+    "citedFigures": {
+      "description": "Numbers the agent derived outside the run, so prose may quote them. Every figure must name a source file and the method used. `report --validate` rejects any number in the prose body that is neither generated nor declared here.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "value", "source", "method"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "value": { "type": "number" },
+          "source": {
+            "description": "Path the figure was derived from, relative to the system root or the harness root.",
+            "type": "string",
+            "minLength": 1
+          },
+          "method": {
+            "description": "One sentence: how the value was counted. This is the footnote a human analyst would write.",
+            "type": "string",
+            "minLength": 1
+          },
+          "derive": {
+            "description": "Optional machine-checkable recipe. When present, `report --validate` recomputes the value from the harness's own extracted catalog and fails on a mismatch. Prefer it wherever it applies: a declared method is a promise, a derivation is a proof.",
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "prop"],
+                "properties": {
+                  "kind": { "const": "exportsWithProp" },
+                  "prop": { "type": "string", "minLength": 1 }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+
+    "findings": {
+      "description": "Agent-written. Interpretation, and expected to vary between authors. What is enforced is coverage (every hard failure and every low audit score must be addressed) and grounding (every finding must cite something real).",
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+
+    "recommendations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "effort", "breaking", "findingIds"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "title": { "type": "string", "minLength": 1 },
+          "effort": { "enum": ["low", "medium", "high"] },
+          "breaking": { "type": "boolean" },
+          "findingIds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/slug" } }
+        }
+      }
+    },
+
+    "validityLimits": {
+      "description": "What this report cannot support. A single-rep run cannot distinguish a systematic effect from model variance, and saying so is part of the report.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "text": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "gateCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "review", "fail"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "review": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "dimensionMeans": {
+      "description": "Mean score per graded dimension, keyed by dimension id (imports, apiFidelity, tokenDiscipline, a11yStatic, compile, judgment).",
+      "type": "object",
+      "additionalProperties": { "type": "number", "minimum": 0, "maximum": 100 }
+    },
+    "axis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score"],
+      "properties": {
+        "score": {
+          "description": "Null when the axis is unmeasurable for this run, e.g. Lift with no bare context.",
+          "type": ["number", "null"]
+        },
+        "raw": {
+          "description": "Present where the natural unit differs from the 0-100 composite scale. Lift is a point delta and may be negative.",
+          "type": "number"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "severity", "status", "owner", "section", "evidence"],
+      "properties": {
+        "id": {
+          "description": "Stable across reports. If next quarter's report describes the same underlying cause, it reuses this id. That is how a defect is tracked over time. Findings beyond the mandatory coverage set take an 'obs-' prefix.",
+          "$ref": "#/$defs/slug"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "severity": {
+          "description": "defect: the system's code is wrong or internally inconsistent. gap: an asset that should exist does not. divergence: a deliberate choice that differs from ecosystem convention, with no failure attached. observation: everything else.",
+          "enum": ["defect", "gap", "divergence", "observation"]
+        },
+        "status": {
+          "enum": ["open", "confirmed", "fixed", "wont-fix", "needs-triage"]
+        },
+        "owner": {
+          "description": "Whose problem it is. 'harness' and 'tooling' keep benchmark defects from being read as design-system defects.",
+          "enum": ["system", "harness", "tooling"]
+        },
+        "section": {
+          "description": "Heading number in the prose body where this finding is written up, e.g. \"5.1\".",
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)*$"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "recommendationIds": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/slug" }
+        }
+      }
+    },
+    "evidence": {
+      "description": "Every kind resolves against real data. `report --validate` rejects a citation that does not.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "runId", "cellKey", "taskId", "rep"],
+          "properties": {
+            "kind": { "const": "cell" },
+            "runId": { "type": "string", "minLength": 1 },
+            "cellKey": { "type": "string", "minLength": 1 },
+            "taskId": { "type": "string", "minLength": 1 },
+            "rep": { "type": "integer", "minimum": 1 },
+            "dimension": { "type": "string", "minLength": 1 },
+            "note": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "checkId"],
+          "properties": {
+            "kind": { "const": "auditCheck" },
+            "checkId": { "type": "string", "minLength": 1 },
+            "note": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": { "const": "file" },
+            "path": { "type": "string", "minLength": 1 },
+            "lines": { "type": "string" },
+            "note": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "figureId"],
+          "properties": {
+            "kind": { "const": "figure" },
+            "figureId": { "$ref": "#/$defs/slug" },
+            "note": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

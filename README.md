@@ -216,6 +216,51 @@ npx tsx src/cli.ts prune --apply --run runs/<id>
 
 `prune` is manual (the runner never calls it). It deletes per-cell `workspace/` copies after you are done retrying. In-flight runs and runs that still have timeout / error / pending cells are skipped so `--resume` / `--retry-errored` still have a tree to work in. Pass `--force` if you want to strip those anyway — retry still works, it provisions a fresh workspace. `--deep` also drops `files/` and breaks `grade --run`.
 
+## Written reports
+
+`report.html` is a heatmap for reading a single run. A **written report** is the other artifact: the
+document you hand to a design-system team, and the record you compare against next quarter.
+
+The artifact is markdown. It carries YAML front matter conforming to
+[`schema/report.schema.json`](schema/report.schema.json), which is what makes a folder of reports
+machine-comparable over time.
+
+```bash
+# 1. compute every number the report needs
+npx tsx src/cli.ts report --stats --run runs/<id> --system <system-id>   --since reports/<system-id>/<previous>.report.md
+
+# 2. write reports/<system-id>/<YYYY-MM-DD>-<profile>.report.md
+
+# 3. check it
+npx tsx src/cli.ts report --validate reports/<system-id>/<date>-<profile>.report.md
+```
+
+Reports are written by an agent. The split that makes them trustworthy:
+
+- **The data layer is fixed.** `--stats` emits the front matter and the computed sections
+  (executive summary, config, extraction, axis primer, per-cell and by-context tables) as finished
+  markdown. The author pastes them verbatim and never does arithmetic. `--validate` re-renders them
+  and fails on a byte difference.
+- **The interpretation layer is free.** Findings, notable results, validity limits and
+  recommendations are the author's, and two authors will write them differently, the way two human
+  analysts would.
+
+`--validate` enforces grounding rather than conclusions. Every number in the prose must trace to a
+computed value or to a `citedFigures` entry naming its source and method; every finding must cite a
+cell, audit check or file that actually exists; and every hard failure and every low audit score
+must be addressed by some finding. What the report *concludes* about each is never constrained.
+
+Finding ids are the history mechanism: an id names a cause and stays stable across reports, so the
+same defect is recognisable next quarter and can be carried forward as `fixed`. `--stats --since`
+prints the previous report's ids for reuse. Two reports are numerically comparable only when their
+`comparabilityKey` matches, which encodes profile, contexts, reps, consume mode and fixture.
+
+Commit `reports/` and the history lives in git.
+
+- [`docs/report-authoring.md`](docs/report-authoring.md) is the full contract.
+- [`docs/report-example.md`](docs/report-example.md) is a complete worked example.
+- `.claude/skills/ds-bench-report/` drives the authoring agent in Claude Code.
+
 ## Benchmarks & CI
 
 ```bash
