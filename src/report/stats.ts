@@ -777,9 +777,10 @@ function renderConfiguration(stats: ReportStats): string {
 }
 
 function renderExtraction(stats: ReportStats): string {
-  const catalog = stats.auditChecks.find((c) => c.id === 'catalog-quality');
-  const line = catalog?.findings.find((f) => /components=|exports=/.test(f.message))?.message;
-  const body = line ?? 'Extraction counts were not recorded by the catalog-quality check for this run.';
+  const e = stats.extraction;
+  const body = e
+    ? `components=${e.components} exports=${e.exports} props=${e.props} cssVars=${e.cssVars} utilities=${e.utilities}`
+    : 'The catalog has not been extracted in this checkout (run `extract`), so counts are unavailable.';
   return ['```', body, '```'].join('\n');
 }
 

@@ -81,12 +81,14 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
                               authoring agent pastes these verbatim and never does arithmetic.
                               --since <previous report> prints that report's finding ids so the
                               same defect keeps the same id across reports.
-  report --validate <report.md>
+  report --validate <report.md> [--since <previous report>]
                               check a report against schema/report.schema.json: generated
                               sections must byte-match a re-render, every number in the prose
                               must trace to computed data or a declared citedFigure, every
                               finding must cite real evidence, and every hard failure must be
-                              addressed. Exit 1 on any violation. See docs/reports/report-authoring.md.
+                              addressed. --since additionally warns when a finding id from the
+                              previous report was dropped instead of carried forward. Exit 1 on
+                              any violation. See docs/reports/report-authoring.md.
   compare <runDir...> [--out <file>]
                               side-by-side compare of N runs
   leaderboard <auditJson...> [--out <file>]
@@ -400,14 +402,31 @@ async function cmdReportStats(opts: {
   return 0;
 }
 
-async function cmdReportValidate(opts: { filePath: string; configPathArg?: string }): Promise<number> {
-  const { loadReportSchema, parseReportFrontMatter, validateReport, ReportParseError } = await import('./report/document.ts');
+async function cmdReportValidate(opts: { filePath: string; configPathArg?: string; sinceArg?: string }): Promise<number> {
+  const { loadReportSchema, parsePriorFindings, parseReportFrontMatter, validateReport, ReportParseError } =
+    await import('./report/document.ts');
 
   if (!existsSync(opts.filePath)) {
     console.error(`report not found: ${opts.filePath}`);
     return 2;
   }
   const markdown = readFileSync(opts.filePath, 'utf8');
+
+  // The same --since a `report --stats` run used, so G12 can flag finding ids
+  // that were silently dropped instead of carried forward.
+  let prior = null;
+  if (opts.sinceArg) {
+    if (!existsSync(opts.sinceArg)) {
+      console.error(`--since file not found: ${opts.sinceArg}`);
+      return 2;
+    }
+    try {
+      prior = parsePriorFindings(readFileSync(opts.sinceArg, 'utf8'), opts.sinceArg);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 2;
+    }
+  }
 
   let primaryRunId: string | null = null;
   try {
@@ -448,6 +467,7 @@ async function cmdReportValidate(opts: { filePath: string; configPathArg?: strin
     context,
     sourceRoots,
     catalog,
+    prior,
   });
 
   for (const w of result.warnings) console.log(`  warn  [${w.gate}] ${w.message}`);
@@ -810,7 +830,7 @@ async function main(): Promise<number> {
           console.error('report --validate needs a .report.md path');
           return 2;
         }
-        return cmdReportValidate({ filePath, configPathArg: values.config });
+        return cmdReportValidate({ filePath, configPathArg: values.config, sinceArg: values.since });
       }
 
       const { latestRunDir } = await import('./run/runner.ts');

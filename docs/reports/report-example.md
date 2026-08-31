@@ -308,7 +308,7 @@ documentation layer actually changes agent behaviour, rather than whether the do
 ### 2.3 Extraction results
 
 ```
-Extraction counts were not recorded by the catalog-quality check for this run.
+components=20 exports=24 props=96 cssVars=120 utilities=0
 ```
 
 ### 2.4 Fixture deviations

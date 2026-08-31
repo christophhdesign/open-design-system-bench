@@ -142,6 +142,17 @@ test('G4: an invented number in agent prose fails', () => {
   assert.ok(result.errors.some((e) => /61\.4/.test(e.message)));
 });
 
+test('G4: negating a computed figure is a wrong claim, not a formatting choice', () => {
+  // 90.25 is the fixture run's median and is quotable; -90.25 is not a number
+  // the run produced. Deltas enter allowedNumbers with both signs already.
+  const tampered = example().replace(
+    'scored 35.0, the lowest of the seven static checks',
+    'scored 35.0, the lowest of the seven static checks, a swing of -90.25 points',
+  );
+  const result = validate(tampered);
+  assert.ok(result.errors.some((e) => e.gate === 'G4 numbers' && /-90\.25/.test(e.message)));
+});
+
 test('G4: a number inside a code fence is quoted output, not a claim', () => {
   const tampered = example().replace(
     '### 5.1 No AGENTS.md at the system root\n',
@@ -338,5 +349,25 @@ test('scanProseNumbers reads thousands separators as one number', () => {
   assert.deepEqual(
     hits.map((h) => h.value),
     [1234],
+  );
+});
+
+test('scanProseNumbers merges every comma group, not just the first', () => {
+  // A single-pass "(\d),(\d{3})" replace used to leave "1,234,567" as
+  // "1234,567", which then scanned as two bogus claims (1234 and 567).
+  const hits = scanProseNumbers('The run consumed 1,234,567 tokens and 12,345,678,901 bytes.', 1);
+  assert.deepEqual(
+    hits.map((h) => h.value),
+    [1234567, 12345678901],
+  );
+});
+
+test('scanProseNumbers treats long digit runs as claims, not commit hashes', () => {
+  // [0-9a-f]{7,40} matches plain decimal runs too. Only a token with a hex
+  // letter is a hash; "8675309" is a number an author is asserting.
+  const hits = scanProseNumbers('It wasted 8675309 tokens; see commit deadbee7f00d for the fix.', 1);
+  assert.deepEqual(
+    hits.map((h) => h.value),
+    [8675309],
   );
 });

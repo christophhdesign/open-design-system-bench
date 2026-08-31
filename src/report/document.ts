@@ -272,8 +272,8 @@ export function scanProseNumbers(content: string, startLine: number, sectionNumb
     line = line.replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ');         // ISO dates
     line = line.replace(/\b\d{8}-\d{6}\S*/g, ' ');              // run ids
     line = line.replace(/\bv?\d+\.\d+\.\d+(?:[-+][\w.]+)?\b/g, ' '); // semver
-    line = line.replace(/\b[0-9a-f]{7,40}\b/g, ' ');            // commit hashes
-    line = line.replace(/(\d),(\d{3})\b/g, '$1$2');             // thousands separators
+    line = line.replace(/\b[0-9a-f]{7,40}\b/g, (m) => (/[a-f]/.test(m) ? ' ' : m)); // commit hashes, not digit runs
+    line = line.replace(/\b\d{1,3}(?:,\d{3})+\b/g, (m) => m.replace(/,/g, '')); // thousands separators
 
     for (const m of line.matchAll(/(?<![\w.])[-−]?\d+(?:\.\d+)?(?![\w])/g)) {
       const raw = m[0].replace('−', '-');
@@ -291,9 +291,10 @@ export function scanProseNumbers(content: string, startLine: number, sectionNumb
 const NUMERIC_TOLERANCE = 0.05;
 
 function isTraceable(value: number, allowed: number[], figures: number[]): boolean {
-  const abs = Math.abs(value);
+  // Sign matters: deltas enter allowedNumbers in both directions, so a negated
+  // quote of a positive-only figure is a wrong claim, not a formatting choice.
   return (
-    allowed.some((a) => Math.abs(a - value) <= NUMERIC_TOLERANCE || Math.abs(Math.abs(a) - abs) <= NUMERIC_TOLERANCE) ||
+    allowed.some((a) => Math.abs(a - value) <= NUMERIC_TOLERANCE) ||
     figures.some((f) => Math.abs(f - value) <= NUMERIC_TOLERANCE)
   );
 }

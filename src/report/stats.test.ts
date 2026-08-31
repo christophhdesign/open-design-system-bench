@@ -251,3 +251,22 @@ test('the config snapshot redacts the machine-specific checkout path', () => {
   assert.ok(!block.includes('/example'));
   assert.ok(!block.includes('EXAMPLE_ROOT'));
 });
+
+test('section 2.3 renders the extraction counts, not an audit-message scrape', () => {
+  const records = [record('t1', 'bare', 100, 'pass', [dim('imports', 100)])];
+  const run = buildRunResults(manifestFor(records), records);
+  const withCatalog = buildReportStats(run, 'sys', CONFIG, NO_CHECKS, computeAuditScore(NO_CHECKS, run, 'sys'), {
+    components: 45,
+    exports: 228,
+    props: 439,
+    cssVars: 217,
+    utilities: 117,
+  });
+  assert.equal(
+    renderStatsBlocks(withCatalog)['2.3'],
+    ['```', 'components=45 exports=228 props=439 cssVars=217 utilities=117', '```'].join('\n'),
+  );
+
+  const withoutCatalog = statsFor(records); // extraction: null
+  assert.match(renderStatsBlocks(withoutCatalog)['2.3'], /has not been extracted/);
+});
