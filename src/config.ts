@@ -14,6 +14,8 @@ export const paths = {
   tokensDir: join(PKG_ROOT, 'tokens'),
   runsDir: join(PKG_ROOT, 'runs'),
   baselinesDir: join(PKG_ROOT, 'baselines'),
+  // The report front-matter contract. Read at validate time; never emitted per report.
+  reportSchema: join(PKG_ROOT, 'schema', 'report.schema.json'),
   // Optional, provider-agnostic model pricing catalog. Absent by default;
   // see the format note at the top of src/providers/pricing.ts.
   pricingCatalog: join(PKG_ROOT, 'pricing-catalog.json'),

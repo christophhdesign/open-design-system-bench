@@ -43,8 +43,18 @@ INTERNAL.md
 # One organization's model/pricing catalog, not a generic mechanism yet.
 nexos-models.json
 
-# Aurora-specific source-alias fixture templates. Kept locally so the internal
-# example still runs; the shipped harness uses the generic fixtures/source-app,
-# which fills __COMPONENTS_PKG__ / __SYSTEM_ROOT__ from each system's config.
-fixtures/reactkit-app/
-fixtures/appkit-app/
+# Fixture templates. Only the two generic ones ship with the harness; a template
+# written for a specific design system describes that system's private repo
+# layout and stays local. See fixtures/README.md.
+fixtures/*/
+!fixtures/source-app/
+!fixtures/npm-app/
+
+# Local Claude Code settings (the checked-in skill under .claude/skills/ is intentional)
+.claude/settings.local.json
+
+# Generated AI-readiness reports, one dir per design system under test. Like
+# runs/, these are output about YOUR system rather than about this tool, so they
+# stay local. The reference docs alongside them (README, report-authoring,
+# report-example) are tracked.
+docs/reports/*/

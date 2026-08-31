@@ -91,6 +91,14 @@ source and is not part of the shipped repo.
   every API gate while being the worst outcome.
 - **Tier thresholds** in `src/audit/score.ts` (AI-native ≥70 / Invested ≥40) are documented
   defaults awaiting recalibration from the reference-run distribution.
+- **Written reports split a fixed data layer from a free interpretation layer.** `report --stats`
+  generates every number and every computed section; `report --validate` re-renders them and
+  requires a byte match, and rejects any figure in agent prose that does not trace to computed data
+  or to a declared `citedFigures` entry. What a report *concludes* is never constrained: coverage
+  and grounding are enforced, conclusions are not. Do not add gates that dictate findings.
+- **Finding ids name a cause and stay stable across reports.** That is the whole mechanism by which
+  a system's evolution becomes visible. `report --stats --since <previous report>` exists to carry
+  them forward; a renamed id silently breaks history.
 
 ## Map
 
@@ -109,9 +117,16 @@ src/run/                 matrix, fixture, collect, runner (pause/resume lives he
 src/agents/              claude-code (agentic), api-oneshot (single-shot), codex (stub), errors
 src/providers/           fetch clients (openai/anthropic wire formats), model-spec, pricing
 src/grade/               ast, mechanical/* (5 dimensions), judge, score
-src/report/              aggregate, html, compare, leaderboard, ci, shared
+src/report/              aggregate, html, compare, leaderboard, ci, shared; written-report
+                         contract: stats (every computed number + the fixed outline),
+                         document (parse + the validate gates), json-schema-lite, figures
 src/audit/               7 Tier-0 checks, score assembly, convention-lexicon.json
 src/init/                wizard
+schema/                  report.schema.json - the written-report front-matter contract
+docs/reports/            README, report-authoring.md (the contract in prose),
+                         report-example.md; generated per-system reports land
+                         here and are gitignored
+.claude/skills/          ds-bench-report: drives the report-authoring agent
 ROADMAP.md               the plan: phase status, next tasks, eval catalog (internal, not
                          part of the shipped repo)
 ```

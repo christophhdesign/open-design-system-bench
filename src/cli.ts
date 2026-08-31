@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
+  PKG_ROOT,
   catalogPath,
   loadBenchConfig,
   loadSystems,
@@ -73,6 +74,21 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
                               provider (bench.config.json "providers") instead of the
                               claude CLI; requires that provider's apiKeyEnv to be set.
   report [--run <dir>]        regenerate report.html from results.json
+  report --stats [--run <dir>] [--system <id>] [--since <report.md>] [--out <file>]
+                              compute every number an AI-readiness report needs and emit it as
+                              paste-ready markdown: front matter, the generated sections, the
+                              coverage list a report must address, and advisory leads. An
+                              authoring agent pastes these verbatim and never does arithmetic.
+                              --since <previous report> prints that report's finding ids so the
+                              same defect keeps the same id across reports.
+  report --validate <report.md> [--since <previous report>]
+                              check a report against schema/report.schema.json: generated
+                              sections must byte-match a re-render, every number in the prose
+                              must trace to computed data or a declared citedFigure, every
+                              finding must cite real evidence, and every hard failure must be
+                              addressed. --since additionally warns when a finding id from the
+                              previous report was dropped instead of carried forward. Exit 1 on
+                              any violation. See docs/reports/report-authoring.md.
   compare <runDir...> [--out <file>]
                               side-by-side compare of N runs
   leaderboard <auditJson...> [--out <file>]
@@ -222,6 +238,250 @@ async function probeDocsUrlHead(docsUrl: string, timeoutMs = 5000): Promise<{ re
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ---------------------------------------------------------------------------
+// report --stats / report --validate
+//
+// The report artifact is markdown. `--stats` computes every number in it so an
+// authoring agent never has to; `--validate` recomputes them and refuses a
+// document whose figures do not trace back to the run.
+// ---------------------------------------------------------------------------
+
+type ReportStatsModule = typeof import('./report/stats.ts');
+
+interface StatsContext {
+  ok: true;
+  stats: ReturnType<ReportStatsModule['buildReportStats']>;
+  run: RunResults;
+  generatedFrontMatter: Record<string, unknown>;
+  systemId: SystemId;
+  systemRoot: string;
+  catalog: SystemCatalog | null;
+}
+
+interface StatsFailure {
+  ok: false;
+  message: string;
+  code: number;
+}
+
+async function buildStatsContext(
+  runDir: string,
+  systemArg: string | undefined,
+  configPathArg: string | undefined,
+): Promise<StatsContext | StatsFailure> {
+  const { runAuditChecks } = await import('./audit/run.ts');
+  const { computeAuditScore } = await import('./audit/score.ts');
+  const { buildReportStats, buildGeneratedFrontMatter } = await import('./report/stats.ts');
+
+  const systemsConfigPath = resolveSystemsConfigPath(configPathArg);
+  let systems: ReturnType<typeof loadSystems>;
+  try {
+    systems = loadSystems(systemsConfigPath);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err), code: 2 };
+  }
+
+  const resultsPath = join(runDir, 'results.json');
+  if (!existsSync(resultsPath)) {
+    return { ok: false, message: `no results.json found at ${resultsPath}`, code: 2 };
+  }
+  let run: RunResults;
+  try {
+    run = loadResults(runDir);
+  } catch (err) {
+    return { ok: false, message: `failed to parse ${resultsPath}: ${err instanceof Error ? err.message : err}`, code: 2 };
+  }
+
+  const inRun = [...new Set(run.records.map((r) => r.cell.system))];
+  let systemId: SystemId;
+  if (systemArg) {
+    systemId = systemArg as SystemId;
+    if (!inRun.includes(systemId)) {
+      return { ok: false, message: `run ${run.runId} has no cells for system "${systemId}" (has: ${inRun.join(', ')})`, code: 2 };
+    }
+  } else if (inRun.length === 1) {
+    systemId = inRun[0];
+  } else if (inRun.length === 0) {
+    return { ok: false, message: `run ${run.runId} has no cell records`, code: 2 };
+  } else {
+    // A report describes one design system. Picking for the operator would
+    // silently produce a report about half a run.
+    return {
+      ok: false,
+      message: `run ${run.runId} covers ${inRun.length} systems (${inRun.join(', ')}); a report is per-system, so pass --system <id>`,
+      code: 2,
+    };
+  }
+
+  const cfg = systems[systemId];
+  if (!cfg) {
+    return { ok: false, message: `system "${systemId}" is in the run but not declared in ${systemsConfigPath}`, code: 2 };
+  }
+
+  const { catalogsDir, tokensDir } = resolveDataDirs(systemsConfigPath);
+  const checks = await runAuditChecks(systemId, cfg, { catalogsDir, tokensDir });
+  const score = computeAuditScore(checks, run, systemId);
+
+  const { loadCatalogIfPresent } = await import('./report/figures.ts');
+  const catalog = loadCatalogIfPresent(catalogsDir, systemId);
+  let extraction: ReturnType<ReportStatsModule['buildReportStats']>['extraction'] = null;
+  if (catalog) {
+    const tPath = tokensPath(systemId, tokensDir);
+    let cssVars = 0;
+    let utilities = 0;
+    if (existsSync(tPath)) {
+      try {
+        const tokens = JSON.parse(readFileSync(tPath, 'utf8')) as { cssVars?: string[]; utilities?: string[] };
+        cssVars = tokens.cssVars?.length ?? 0;
+        utilities = tokens.utilities?.length ?? 0;
+      } catch {
+        // A malformed token snapshot is the extractor's problem, not the
+        // report's: fall back to zeroes rather than refusing to report.
+      }
+    }
+    extraction = {
+      components: catalog.components.length,
+      exports: catalog.allExports.length,
+      props: Object.values(catalog.allPropsByExport).reduce((sum, p) => sum + p.length, 0),
+      cssVars,
+      utilities,
+    };
+  }
+
+  const stats = buildReportStats(run, systemId, cfg, checks, score, extraction);
+  return {
+    ok: true,
+    stats,
+    run,
+    generatedFrontMatter: buildGeneratedFrontMatter(stats, run),
+    systemId,
+    systemRoot: cfg.root,
+    catalog,
+  };
+}
+
+async function cmdReportStats(opts: {
+  runDir: string;
+  systemArg?: string;
+  configPathArg?: string;
+  sinceArg?: string;
+  outArg?: string;
+}): Promise<number> {
+  const { renderStatsPack } = await import('./report/stats.ts');
+  const { parsePriorFindings } = await import('./report/document.ts');
+
+  const ctx = await buildStatsContext(opts.runDir, opts.systemArg, opts.configPathArg);
+  if (!ctx.ok) {
+    console.error(ctx.message);
+    return ctx.code;
+  }
+
+  let prior = null;
+  if (opts.sinceArg) {
+    if (!existsSync(opts.sinceArg)) {
+      console.error(`--since file not found: ${opts.sinceArg}`);
+      return 2;
+    }
+    try {
+      prior = parsePriorFindings(readFileSync(opts.sinceArg, 'utf8'), opts.sinceArg);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 2;
+    }
+  }
+
+  const pack = renderStatsPack(ctx.stats, ctx.generatedFrontMatter, prior);
+  if (opts.outArg) {
+    writeFileSync(opts.outArg, `${pack}\n`);
+    console.log(`wrote ${opts.outArg}`);
+  } else {
+    console.log(pack);
+  }
+  return 0;
+}
+
+async function cmdReportValidate(opts: { filePath: string; configPathArg?: string; sinceArg?: string }): Promise<number> {
+  const { loadReportSchema, parsePriorFindings, parseReportFrontMatter, validateReport, ReportParseError } =
+    await import('./report/document.ts');
+
+  if (!existsSync(opts.filePath)) {
+    console.error(`report not found: ${opts.filePath}`);
+    return 2;
+  }
+  const markdown = readFileSync(opts.filePath, 'utf8');
+
+  // The same --since a `report --stats` run used, so G12 can flag finding ids
+  // that were silently dropped instead of carried forward.
+  let prior = null;
+  if (opts.sinceArg) {
+    if (!existsSync(opts.sinceArg)) {
+      console.error(`--since file not found: ${opts.sinceArg}`);
+      return 2;
+    }
+    try {
+      prior = parsePriorFindings(readFileSync(opts.sinceArg, 'utf8'), opts.sinceArg);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 2;
+    }
+  }
+
+  let primaryRunId: string | null = null;
+  try {
+    const parsed = parseReportFrontMatter(markdown, opts.filePath);
+    const fm = parsed.frontMatter as { provenance?: { runs?: Array<{ runId?: string; role?: string }> } };
+    primaryRunId = fm.provenance?.runs?.find((r) => r.role === 'primary')?.runId ?? null;
+  } catch (err) {
+    if (err instanceof ReportParseError) {
+      console.error(err.message);
+      return 1;
+    }
+    throw err;
+  }
+
+  // Reports outlive runs. A missing run directory downgrades the data gates to
+  // warnings instead of failing a report that was valid when it was written.
+  let context = null;
+  let sourceRoots = [PKG_ROOT];
+  let catalog: SystemCatalog | null = null;
+  if (primaryRunId) {
+    const runDir = join(paths.runsDir, primaryRunId);
+    if (existsSync(join(runDir, 'results.json'))) {
+      const ctx = await buildStatsContext(runDir, undefined, opts.configPathArg);
+      if (ctx.ok) {
+        context = { stats: ctx.stats, run: ctx.run, generatedFrontMatter: ctx.generatedFrontMatter };
+        sourceRoots = [ctx.systemRoot, PKG_ROOT];
+        catalog = ctx.catalog;
+      } else {
+        console.error(`note: could not rebuild run data (${ctx.message}); validating structure only`);
+      }
+    }
+  }
+
+  const result = validateReport({
+    filename: opts.filePath,
+    markdown,
+    schema: loadReportSchema(paths.reportSchema),
+    context,
+    sourceRoots,
+    catalog,
+    prior,
+  });
+
+  for (const w of result.warnings) console.log(`  warn  [${w.gate}] ${w.message}`);
+  for (const e of result.errors) console.error(`  FAIL  [${e.gate}] ${e.message}`);
+
+  if (result.errors.length > 0) {
+    console.error(`\n${opts.filePath}: ${result.errors.length} error${result.errors.length === 1 ? '' : 's'}, ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}`);
+    return 1;
+  }
+  console.log(
+    `\n${opts.filePath}: valid${result.degraded ? ' (structure only, run data unavailable)' : ''}` +
+      `${result.warnings.length > 0 ? `, ${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}` : ''}`,
+  );
+  return 0;
 }
 
 async function cmdDoctor(configPathArg: string | undefined, tasksDirArg: string | undefined): Promise<number> {
@@ -418,6 +678,9 @@ async function main(): Promise<number> {
       json: { type: 'boolean' },
       verbose: { type: 'boolean' },
       offline: { type: 'boolean' },
+      stats: { type: 'boolean' },
+      validate: { type: 'string' },
+      since: { type: 'string' },
     },
   });
 
@@ -561,13 +824,33 @@ async function main(): Promise<number> {
     }
 
     case 'report': {
+      if (values.validate !== undefined) {
+        const filePath = typeof values.validate === 'string' && values.validate ? values.validate : positionals[0];
+        if (!filePath) {
+          console.error('report --validate needs a .report.md path');
+          return 2;
+        }
+        return cmdReportValidate({ filePath, configPathArg: values.config, sinceArg: values.since });
+      }
+
       const { latestRunDir } = await import('./run/runner.ts');
-      const { renderReportHtml } = await import('./report/html.ts');
       const runDir = values.run ?? latestRunDir();
       if (!runDir) {
         console.error('no run found — pass --run <dir>');
         return 2;
       }
+
+      if (values.stats) {
+        return cmdReportStats({
+          runDir,
+          systemArg: values.system,
+          configPathArg: values.config,
+          sinceArg: values.since,
+          outArg: values.out,
+        });
+      }
+
+      const { renderReportHtml } = await import('./report/html.ts');
       writeFileSync(join(runDir, 'report.html'), renderReportHtml(loadResults(runDir)));
       console.log(`wrote ${join(runDir, 'report.html')}`);
       return 0;
