@@ -244,6 +244,21 @@ test('rendering is deterministic: the same stats render byte-identical blocks', 
   assert.deepEqual(a, b);
 });
 
+test('the extraction block reports the catalog counts, and says so when there is no catalog', () => {
+  const records = [record('t1', 'bare', 100, 'pass', [dim('imports', 100)])];
+  const run = buildRunResults(manifestFor(records), records);
+  const score = computeAuditScore(NO_CHECKS, run, 'sys');
+  const extraction = { components: 20, exports: 24, props: 96, cssVars: 120, utilities: 0 };
+
+  const withCatalog = renderStatsBlocks(buildReportStats(run, 'sys', CONFIG, NO_CHECKS, score, extraction))['2.3'];
+  for (const [label, value] of Object.entries(extraction)) {
+    assert.match(withCatalog, new RegExp(`${label}\\s+${value}`), `2.3 does not report ${label}`);
+  }
+
+  const without = renderStatsBlocks(buildReportStats(run, 'sys', CONFIG, NO_CHECKS, score, null))['2.3'];
+  assert.match(without, /has not been extracted/);
+});
+
 test('the config snapshot redacts the machine-specific checkout path', () => {
   const stats = statsFor([record('t1', 'bare', 100, 'pass', [dim('imports', 100)])]);
   const block = renderStatsBlocks(stats)['2.2'];

@@ -777,10 +777,26 @@ function renderConfiguration(stats: ReportStats): string {
 }
 
 function renderExtraction(stats: ReportStats): string {
-  const catalog = stats.auditChecks.find((c) => c.id === 'catalog-quality');
-  const line = catalog?.findings.find((f) => /components=|exports=/.test(f.message))?.message;
-  const body = line ?? 'Extraction counts were not recorded by the catalog-quality check for this run.';
-  return ['```', body, '```'].join('\n');
+  // The counts come straight off the committed catalog/token snapshots, the
+  // same source the front matter's provenance.catalog block reports. Reading
+  // them out of an audit-check message instead made this section depend on
+  // that check's phrasing, and it rendered the "not recorded" fallback for
+  // every run because no check emits such a message.
+  const { extraction } = stats;
+  if (!extraction) {
+    return ['```', 'The catalog has not been extracted in this checkout, so no counts are available.', '```'].join('\n');
+  }
+  const rows: [string, number][] = [
+    ['components', extraction.components],
+    ['exports', extraction.exports],
+    ['props', extraction.props],
+    ['cssVars', extraction.cssVars],
+    ['utilities', extraction.utilities],
+  ];
+  const labelWidth = Math.max(...rows.map(([label]) => label.length));
+  const valueWidth = Math.max(...rows.map(([, value]) => String(value).length));
+  const body = rows.map(([label, value]) => `${label.padEnd(labelWidth)}  ${String(value).padStart(valueWidth)}`);
+  return ['```', ...body, '```'].join('\n');
 }
 
 function renderAxisPrimer(stats: ReportStats): string {
