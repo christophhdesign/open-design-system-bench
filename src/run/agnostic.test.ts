@@ -11,8 +11,9 @@ import { join } from 'node:path';
 
 import type { BenchConfig, BenchProfile, SystemCatalog, SystemConfig, Task } from '../types.ts';
 import { cellKey } from '../types.ts';
+import { PKG_ROOT } from '../config.ts';
 import { expandMatrix } from './matrix.ts';
-import { injectContextForTest } from './fixture.ts';
+import { injectContextForTest, isSelfContainedType, renderCustomElementTypes, templateDir, writeCustomElementTypes } from './fixture.ts';
 import { validateTaskSuite } from '../tasks/load.ts';
 
 // ---------------------------------------------------------------------------
@@ -146,6 +147,157 @@ test('validateTaskSuite errors on a real hiddenExpectations symbol mismatch, on 
   const { errors } = validateTaskSuite([badTask], { acme: acmeCatalog });
   assert.ok(errors.some((e) => e.includes('NotARealComponent')));
 });
+
+// ---------------------------------------------------------------------------
+// Custom-element fixture selection and generated JSX types
+// ---------------------------------------------------------------------------
+
+test('templateDir picks the custom-elements template for a custom-element system', () => {
+  const base: SystemConfig = {
+    root: '/fake/sys',
+    rootEnv: 'FAKE_SYS_DIR',
+    componentsSrc: 'packages/components/src',
+    componentsPkg: '@fake/elements',
+    foundationsPkg: '@fake/tokens',
+    catalogStrategy: 'docgen',
+    agentContext: { agentsMd: [] },
+  };
+  assert.match(templateDir('sys', { ...base, componentModel: 'custom-elements' }), /custom-elements-app$/);
+  // Default and explicit 'react' both keep the existing React template.
+  assert.match(templateDir('sys', base), /source-app$/);
+  assert.match(templateDir('sys', { ...base, componentModel: 'react' }), /source-app$/);
+  // An explicit per-system template still wins over the component model.
+  assert.equal(
+    templateDir('sys', { ...base, componentModel: 'custom-elements', fixtureTemplate: 'fixtures/npm-app' }),
+    join(PKG_ROOT, 'fixtures/npm-app'),
+  );
+});
+
+const elementCatalog: SystemCatalog = {
+  system: 'sys',
+  generatedAt: '2026-09-03T00:00:00.000Z',
+  source: { root: '/fake/sys', commit: 'abc', srcHash: 'h' },
+  components: [
+    {
+      dir: 'ds-button',
+      exports: [
+        {
+          displayName: 'ds-button',
+          description: 'A button.',
+          props: [
+            { name: 'variant', type: '"primary" | "muted"', required: false },
+            { name: 'loading', type: 'boolean', required: false },
+            { name: 'controlType', type: '"icon" | "text"', required: false },
+            // References a symbol that does not exist in the generated file.
+            { name: 'config', type: 'ButtonConfig', required: false },
+            { name: 'spacing', type: '"none" | Spacing', required: false },
+          ],
+        },
+      ],
+    },
+  ],
+  allExports: ['ds-button', 'DsButton', 'setAssetPath'],
+  allPropsByExport: {
+    'ds-button': ['variant', 'loading', 'controlType', 'config', 'spacing', 'control-type', 'onPressed'],
+    DsButton: ['variant', 'loading', 'controlType', 'config', 'spacing', 'control-type', 'onPressed'],
+    setAssetPath: [],
+  },
+};
+
+test('renderCustomElementTypes declares every element tag, and only tags', () => {
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(out, /"ds-button": HTMLAttributes<HTMLElement>/);
+  // The description becomes a doc comment an agent can read.
+  assert.match(out, /\* A button\./);
+  // A dash is the custom-element spec's own rule for what is an element, so
+  // the PascalCase wrapper spelling and runtime helpers are excluded — they
+  // are importable symbols, not tags, and declaring them as JSX intrinsics
+  // would invite the agent to write <DsButton> and <setAssetPath>.
+  assert.ok(!out.includes('"DsButton"'), 'class-name spelling must not become a JSX intrinsic');
+  assert.ok(!out.includes('"setAssetPath"'), 'runtime helper must not become a JSX intrinsic');
+});
+
+test('renderCustomElementTypes emits real prop types so invented VALUES fail to compile', () => {
+  // Typing every prop `unknown` made an invented value invisible to the whole
+  // harness: apiFidelity checks prop names only, so nothing checked values.
+  // Measured on a real run before this landed, models wrote size="small",
+  // padding="large", state="info" and variant="danger" against elements that
+  // accept none of them, and scored 100 on both apiFidelity and compile.
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(out, /"variant"\?: "primary" \| "muted";/);
+  assert.match(out, /"loading"\?: boolean;/);
+  // An attribute alias accepts exactly what the prop it re-spells accepts.
+  assert.match(out, /"control-type"\?: "icon" \| "text";/);
+});
+
+test('renderCustomElementTypes degrades a type it cannot resolve to unknown', () => {
+  // This .d.ts is compiled as part of every graded workspace, so one
+  // unresolvable type name would fail the compile dimension on every cell of
+  // the run. Anything referencing an outside symbol degrades instead.
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(out, /"config"\?: unknown;/, 'a referenced interface must not be emitted verbatim');
+  assert.match(out, /"spacing"\?: unknown;/, 'a union mixing literals with a named type must degrade whole');
+  assert.match(out, /"onPressed"\?: unknown;/, 'an alias with no catalog type of its own stays unknown');
+  assert.ok(!out.includes('ButtonConfig'), out.slice(0, 400));
+  assert.ok(!out.includes('Spacing'), out.slice(0, 400));
+});
+
+test('isSelfContainedType accepts literal unions and primitives, rejects everything else', () => {
+  for (const t of ['"a" | "b"', 'boolean', 'string', 'number', '"a"', '1 | 2', '"a" | undefined', 'null']) {
+    assert.equal(isSelfContainedType(t), true, `${t} should be emittable`);
+  }
+  for (const t of [
+    'ButtonConfig',
+    '"none" | Spacing',
+    'string[]',
+    '{ open: boolean }',
+    '(e: Event) => void',
+    'EventEmitter<string>',
+    'Record<string, unknown>',
+    undefined,
+    '',
+    'unknown',
+  ]) {
+    assert.equal(isSelfContainedType(t), false, `${String(t)} should degrade to unknown`);
+  }
+});
+
+test('writeCustomElementTypes is a no-op for a react system and warns without a catalog', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-ce-types-'));
+  try {
+    const base: SystemConfig = {
+      root: '/fake/sys',
+      rootEnv: 'FAKE_SYS_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@fake/elements',
+      foundationsPkg: '@fake/tokens',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    writeCustomElementTypes('sys', base, dir, undefined);
+    assert.ok(!existsSync(join(dir, 'src', 'system-elements.d.ts')), 'react systems get no element declarations');
+
+    // Custom-element system with no extracted catalog: warn, do not throw —
+    // the cell still produces gradeable output, it just loses the compile
+    // dimension's unknown-tag signal.
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (msg: string) => warnings.push(String(msg));
+    try {
+      writeCustomElementTypes('sys', { ...base, componentModel: 'custom-elements' }, dir, undefined);
+    } finally {
+      console.warn = realWarn;
+    }
+    assert.ok(!existsSync(join(dir, 'src', 'system-elements.d.ts')));
+    assert.ok(warnings.some((w) => w.includes('no extracted catalog')), warnings.join('\n'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Context injection: skill bundles and globbed docs
 // ---------------------------------------------------------------------------

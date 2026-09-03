@@ -43,12 +43,13 @@ INTERNAL.md
 # One organization's model/pricing catalog, not a generic mechanism yet.
 nexos-models.json
 
-# Fixture templates. Only the two generic ones ship with the harness; a template
+# Fixture templates. Only the generic ones ship with the harness; a template
 # written for a specific design system describes that system's private repo
 # layout and stays local. See fixtures/README.md.
 fixtures/*/
 !fixtures/source-app/
 !fixtures/npm-app/
+!fixtures/custom-elements-app/
 
 # Local Claude Code settings (the checked-in skill under .claude/skills/ is intentional)
 .claude/settings.local.json

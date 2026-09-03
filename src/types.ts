@@ -69,6 +69,25 @@ export interface SystemConfig {
    */
   consume?: 'source' | 'npm';
   /**
+   * How consumers write this system's components, which decides both the
+   * default fixture template and how apiFidelity recognizes usage:
+   *
+   *   - 'react' (the default, omit for current behavior): components are
+   *     imported by name from componentsPkg and used as `<Button>`. Usage is
+   *     import-anchored, so an element only counts once its import resolves.
+   *   - 'custom-elements': the system ships web components (Stencil, Lit, a
+   *     hand-rolled registry). Consumers register the bundle once and then
+   *     write `<ds-button>` in markup with NO per-component import at all, so
+   *     import-anchored usage detection would score a perfect answer as "did
+   *     not use the design system". apiFidelity instead resolves JSX tags
+   *     straight against the catalog for these systems.
+   *
+   * This is a property of the system's public consumption model, not of the
+   * catalog strategy that happened to extract it: a Lit library catalogued via
+   * 'catalog-json' is just as custom-element-shaped as a Stencil one.
+   */
+  componentModel?: 'react' | 'custom-elements';
+  /**
    * Accessible-name vocabulary for the a11yStatic grader, merged over
    * conventional defaults (Input, Select, Toggle, Checkbox, IconButton,
    * FormField, ...). Declare only the names that differ in your system: a text

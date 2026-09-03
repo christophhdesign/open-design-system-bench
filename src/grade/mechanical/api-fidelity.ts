@@ -1,7 +1,20 @@
 // Dimension: apiFidelity (weight .25)
-// Checks that (a) every design-system component the agent imports actually
+// Checks that (a) every design-system component the agent uses actually
 // exists in the extracted catalog (hallucination), and (b) every prop it
-// passes to a component is a real prop of that component (invention). When
+// passes to a component is a real prop of that component (invention).
+//
+// "Uses" means two different things depending on SystemConfig.componentModel.
+// The default 'react' model is import-anchored: a JSX element counts as
+// design-system usage only once an import from componentsPkg binds its name,
+// which is what makes local aliasing (`import { Button as Btn }`) resolve
+// correctly and keeps a plain `<button>` from being mistaken for the system's
+// `<Button>`. A 'custom-elements' system has no such anchor — the elements are
+// registered once by the app entry point and then written as bare tags — so
+// import-anchored detection would score a flawless answer as "no design-system
+// components used", zero, hard fail. For those systems a JSX tag is resolved
+// straight against the catalog by name. Tag names are dashed and case-
+// sensitive per the custom-element spec, so this cannot collide with a native
+// HTML element or with a locally defined React component. When
 // the system config declares `contamination` sentinels (only meaningful when
 // benchmarking more than one system side by side), also tags cross-system
 // contamination: prop names or typography-utility casing that belong to
@@ -42,9 +55,13 @@ const DATA_ATTR_RE = /^data-/;
 const ARIA_ATTR_RE = /^aria-/;
 const EVENT_HANDLER_RE = /^on[A-Z]/;
 
-function isAttrAllowed(attr: string, componentProps: string[]): boolean {
+function isAttrAllowed(attr: string, componentProps: string[], customElements: boolean): boolean {
   if (componentProps.includes(attr)) return true;
   if (ALWAYS_ALLOWED_ATTRS.has(attr)) return true;
+  // On a custom element the HTML spelling is the correct one, and React 19
+  // passes it through unchanged. The system's own docs are HTML, so this is
+  // what its examples teach.
+  if (customElements && (attr === 'class' || attr === 'for')) return true;
   if (DOM_PASSTHROUGH_ATTRS.has(attr)) return true;
   if (DATA_ATTR_RE.test(attr)) return true;
   if (ARIA_ATTR_RE.test(attr)) return true;
@@ -88,8 +105,9 @@ export function gradeApiFidelity(ctx: GradeContext): DimensionResult {
   let score = 100;
   let requiresFail = false;
   let requiresReview = false;
-  let anySystemImport = false;
+  let anySystemUsage = false;
 
+  const customElements = ctx.systemCfg.componentModel === 'custom-elements';
   const validExports = new Set(ctx.catalog.allExports);
   const propsTypeNames = new Set(ctx.catalog.allExports.map((e) => `${e}Props`));
   const contaminationProps = new Set(ctx.systemCfg.contamination?.props ?? []);
@@ -105,7 +123,7 @@ export function gradeApiFidelity(ctx: GradeContext): DimensionResult {
 
     for (const imp of file.analysis.imports) {
       if (!matchesPkg(imp.source, ctx.systemCfg.componentsPkg)) continue;
-      anySystemImport = true;
+      anySystemUsage = true;
 
       for (const { imported, local } of imp.names) {
         if (imported === '__default__' || imported === '*') continue; // unverifiable, not tracked
@@ -132,8 +150,12 @@ export function gradeApiFidelity(ctx: GradeContext): DimensionResult {
     }
 
     for (const el of file.analysis.jsxElements) {
-      const resolvedExport = localToExport.get(el.base);
+      // Import-bound name first (both models), then — for a custom-element
+      // system only — the tag itself, since those carry no import.
+      const resolvedExport =
+        localToExport.get(el.base) ?? (customElements && validExports.has(el.full) ? el.full : undefined);
       if (!resolvedExport) continue; // not a design-system component usage
+      if (customElements) anySystemUsage = true;
 
       if (el.full !== el.base) {
         // Member-expression JSX, e.g. `Modal.Footer` — base already verified
@@ -158,7 +180,7 @@ export function gradeApiFidelity(ctx: GradeContext): DimensionResult {
 
       const allowedProps = ctx.catalog.allPropsByExport[resolvedExport] ?? [];
       for (const attr of el.attrs) {
-        if (isAttrAllowed(attr, allowedProps)) continue;
+        if (isAttrAllowed(attr, allowedProps, customElements)) continue;
         score -= 15;
         requiresReview = true;
         const contamination = contaminationProps.has(attr);
@@ -187,7 +209,10 @@ export function gradeApiFidelity(ctx: GradeContext): DimensionResult {
     }
   }
 
-  if (!anySystemImport) {
+  if (!anySystemUsage) {
+    // "Ignored the design system" is a first-class failure, not a neutral
+    // outcome: output that avoids the system passes every other API gate
+    // while being the worst result a design-system team can get.
     return {
       dimension: 'apiFidelity',
       score: 0,

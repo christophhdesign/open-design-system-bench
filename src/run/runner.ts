@@ -589,6 +589,7 @@ export async function runBench(
           systemCfg: systemsConfig[spec.system],
           context: spec.context,
           destDir: workspaceDir,
+          catalog: assetsBySystem.get(spec.system)?.catalog,
         });
         gen = await getAdapter(spec.agent).generate({
           workspaceDir,
