@@ -18,6 +18,17 @@ source and is not part of the shipped repo.
 
 ## What exists and works (verified 2026-08-27, full test suite green)
 
+- **Web-component systems are first-class.** `SystemConfig.componentModel` is `'react'` (default)
+  or `'custom-elements'`. The latter selects `fixtures/custom-elements-app`, makes apiFidelity
+  resolve JSX tags straight against the catalog instead of requiring an import from componentsPkg,
+  and has `provisionWorkspace` generate `src/system-elements.d.ts` from the extracted catalog so
+  dashed tags typecheck. Two rules that look wrong until you hit them: (1) the custom-elements
+  fixture must NOT alias the system's source in tsconfig, only in Vite — pulling a Stencil library's
+  source into the fixture's TS program compiles it under the wrong compiler options and fails the
+  compile dimension on every cell with errors from the system's own source; the entry is an opaque
+  ambient module in `src/system-module.d.ts` instead. (2) apiFidelity's import anchor is what makes
+  the react model correct, so tag-name resolution is gated on componentModel and must not leak into
+  the react path.
 - **Fully system-agnostic.** Systems are arbitrary string ids declared in
   `systems.config.json` (`{ "systems": { "<id>": SystemConfig } }`). The root config ships a
   `my-system` placeholder that `init` fills in. A config may declare `"dataDir"` to ship its own
@@ -106,7 +117,8 @@ source and is not part of the shipped repo.
 systems.config.json      systems registry (--config to swap in another)
 bench.config.json        profiles, defaults, providers, ci thresholds
 tasks/                   10 domain-neutral starter tasks (YAML)
-fixtures/                source-app (generic source-alias), npm-app (generic npm-consume)
+fixtures/                source-app (generic source-alias), npm-app (generic npm-consume),
+                         custom-elements-app (generic, web-component systems)
 src/cli.ts               all commands: doctor|init|extract|validate-tasks|run|grade|judge|
                          report|compare|leaderboard|ci|prune|audit
 src/config.ts            config + .env loading, dir resolution
