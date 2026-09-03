@@ -508,6 +508,11 @@ function initGitRepo(root: string): void {
   execFileSync('git', ['init', '-q'], { cwd: root });
   execFileSync('git', ['config', 'user.email', 'audit-test@example.com'], { cwd: root });
   execFileSync('git', ['config', 'user.name', 'Audit Test'], { cwd: root });
+  // A developer with commit.gpgsign=true globally has no secret key for this
+  // synthetic identity, so every commit below would fail to sign and the test
+  // would fail for a reason that has nothing to do with what it measures.
+  execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: root });
+  execFileSync('git', ['config', 'tag.gpgsign', 'false'], { cwd: root });
 }
 
 function gitCommitAll(root: string, message: string, isoDate: string): void {
