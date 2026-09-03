@@ -12,6 +12,19 @@
 // its declared entry points (main/module/exports["."]) point at built output
 // rather than raw `src/` (a package that "works" only inside its own
 // monorepo via source aliasing is not usable by an external agent workspace).
+// Not every library is a barrel of importable module dirs, and this check must
+// say so rather than inventing a grade. A custom-element library (Stencil, Lit)
+// has no hand-maintained barrel for a component to fall out of: the compiler
+// generates the exports from the decorators, and the element is registered
+// globally once the bundle loads, so the unreachable-component bug class this
+// check exists for cannot occur. That is not a pass and not a fail, it is a
+// question that does not apply, so the score is withheld (null) and the
+// weighting redistributes it — same treatment catalog-quality gives an
+// unreadable layout. A layout that is neither (no component dirs, no custom
+// elements) is likewise withheld: previously it silently fell through to a
+// `hasTypes ? 60 : 30` constant, which printed as a measured, middling grade
+// when nothing had been measured at all.
+//
 // "Built output" is deliberately NOT limited to a literal `dist/` folder:
 // real-world builds ship as `esm/`, `cjs/`, `lib/`, or even `./index.js` at
 // package root. The actual signal is "not raw TypeScript source": an entry
@@ -135,6 +148,43 @@ function collectComponentDirsWithIndex(srcDir: string): { candidates: string[]; 
   };
 }
 
+const CUSTOM_ELEMENT_DECORATOR_RE = /@(?:Component|customElement)\s*\(/;
+const LAYOUT_SCAN_SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', 'out', '.turbo', '.cache']);
+const LAYOUT_SCAN_MAX_FILES = 5_000;
+
+/**
+ * True when componentsSrc holds a custom-element library rather than a barrel
+ * of module dirs — any `.tsx`/`.ts` under it carrying a Stencil `@Component(`
+ * or Lit `@customElement(` decorator. Recursive, because these libraries nest
+ * components under grouping dirs, and capped because this only needs to prove
+ * existence: it stops at the first hit.
+ */
+function isCustomElementLayout(dir: string, budget = { left: LAYOUT_SCAN_MAX_FILES }): boolean {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (budget.left <= 0) return false;
+    if (entry.name.startsWith('.') || LAYOUT_SCAN_SKIP_DIRS.has(entry.name)) continue;
+    const abs = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (isCustomElementLayout(abs, budget)) return true;
+      continue;
+    }
+    if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+    budget.left -= 1;
+    try {
+      if (CUSTOM_ELEMENT_DECORATOR_RE.test(readFileSync(abs, 'utf8'))) return true;
+    } catch {
+      // unreadable file proves nothing
+    }
+  }
+  return false;
+}
+
 /**
  * True when a declared entry-point value points at built output rather than
  * raw source. Inverted from a naive "does it say dist/" check on purpose: a
@@ -227,16 +277,33 @@ export async function checkExportHygiene(system: SystemId, cfg: SystemConfig, di
     }
   }
 
-  if (componentDirs.length === 0) {
-    findings.push({ severity: 'info', message: `No component directories with an index.ts found under ${cfg.componentsSrc}.` });
-  } else {
+  if (componentDirs.length > 0) {
     findings.push({ severity: 'info', message: `${reachableCount}/${componentDirs.length} component director${componentDirs.length === 1 ? 'y is' : 'ies are'} reachable via the barrel or exports map.` });
+
+    // Weights: reachability is the headline signal this check exists for (70);
+    // types + dist usability are secondary "can an external agent even consume
+    // this package" signals (15 each).
+    const score = reachabilityPct * 0.7 + (hasTypes ? 15 : 0) + (distDeclared ? 15 : 0);
+    return { id: 'export-hygiene', title: 'Export hygiene', score: round1(clamp(score, 0, 100)), findings };
   }
 
-  // Weights: reachability is the headline signal this check exists for (70);
-  // types + dist usability are secondary "can an external agent even consume
-  // this package" signals (15 each).
-  const score = componentDirs.length > 0 ? reachabilityPct * 0.7 + (hasTypes ? 15 : 0) + (distDeclared ? 15 : 0) : hasTypes ? 60 : 30;
+  // No component dirs to assess. Reachability is 70% of this check, so
+  // whatever the reason, there is no honest score to report — see the header
+  // note. The types/dist findings above still stand on their own.
+  if (isCustomElementLayout(srcDir)) {
+    findings.push({
+      severity: 'info',
+      message:
+        `Custom-element layout under ${cfg.componentsSrc} (components declared via @Component/@customElement decorators, not per-dir index files). ` +
+        'Barrel reachability does not apply: the compiler generates the exports and the elements register globally, so a component cannot be unreachable the way this check means. Score withheld.',
+    });
+  } else {
+    findings.push({
+      severity: 'warn',
+      message: `No component directories with an index.ts found under ${cfg.componentsSrc}, and no custom-element declarations either. Reachability was not assessed and the score is withheld.`,
+      fix: `Point componentsSrc at the directory holding the component dirs, if this system has them. If its layout is genuinely neither shape, this check has nothing to measure for it.`,
+    });
+  }
 
-  return { id: 'export-hygiene', title: 'Export hygiene', score: round1(clamp(score, 0, 100)), findings };
+  return { id: 'export-hygiene', title: 'Export hygiene', score: null, findings };
 }
