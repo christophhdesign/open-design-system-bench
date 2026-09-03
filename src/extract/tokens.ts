@@ -6,8 +6,7 @@
 // `@theme`/`@layer`/`@custom-variant` blocks than trying to balance braces.
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { describeFoundationsCss, readFoundationsCss } from '../config.ts';
 import type { SystemConfig, SystemId, SystemTokens } from '../types.ts';
 
 const CSS_VAR_DECL_RE = /^\s*(--[\w-]+)\s*:/;
@@ -18,7 +17,12 @@ const TYPOGRAPHY_RE = /^(body|heading|display|label)/i;
 export const NO_FOUNDATIONS_CSS_HASH = 'no-foundations-css';
 
 export async function extractSystemTokens(system: SystemId, cfg: SystemConfig): Promise<SystemTokens> {
-  if (!cfg.foundationsCss) {
+  // foundationsCss may name one file or several (see readFoundationsCss); the
+  // several-file case is read as one concatenated document, so everything
+  // below — the line scan, the union of names, the content hash — is
+  // identical either way.
+  const css = readFoundationsCss(cfg);
+  if (css === undefined) {
     // foundationsCss is optional: a system with no CSS-custom-property token
     // file just gets an empty token set. Downstream graders degrade
     // gracefully — tokenDiscipline doesn't consult tokens at all, and
@@ -34,8 +38,21 @@ export async function extractSystemTokens(system: SystemId, cfg: SystemConfig): 
     };
   }
 
-  const cssPath = join(cfg.root, cfg.foundationsCss);
-  const content = readFileSync(cssPath, 'utf8');
+  // Every listed file unreadable means a typo'd path, not a system without
+  // tokens — fail loudly rather than silently extracting an empty token set
+  // that downstream checks would report as "this system has no tokens".
+  if (css.read.length === 0) {
+    throw new Error(
+      `foundationsCss for "${system}" (${describeFoundationsCss(cfg)}) could not be read: ${css.missing.join(', ')}`,
+    );
+  }
+  if (css.missing.length > 0) {
+    console.warn(
+      `[extract:${system}] ${css.missing.length} of ${css.read.length + css.missing.length} foundationsCss files could not be read and contributed no tokens: ${css.missing.join(', ')}`,
+    );
+  }
+
+  const content = css.content;
   const lines = content.split(/\r?\n/);
 
   const cssVarSet = new Set<string>();

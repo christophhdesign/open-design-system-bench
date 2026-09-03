@@ -1,7 +1,7 @@
 // Orchestrates ground-truth extraction for one or more systems: picks the
-// right catalog strategy per systems.config.json (`docgen` or `catalog-json`),
-// always extracts tokens, writes both to catalogs/<system>.json and
-// tokens/<system>.json, and prints a one-line summary per system.
+// right catalog strategy per systems.config.json (`docgen`, `catalog-json` or
+// `stencil`), always extracts tokens, writes both to catalogs/<system>.json
+// and tokens/<system>.json, and prints a one-line summary per system.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -9,6 +9,7 @@ import { catalogPath, loadSystems, paths, tokensPath } from '../config.ts';
 import type { SystemCatalog, SystemId, SystemTokens } from '../types.ts';
 import { extractCatalogJsonCatalog } from './catalog-json.ts';
 import { extractDocgenCatalog } from './catalog-docgen.ts';
+import { extractStencilCatalog } from './catalog-stencil.ts';
 import { extractSystemTokens } from './tokens.ts';
 
 const CATALOG_SIZE_WARN_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -77,10 +78,17 @@ export async function runExtract(opts: {
       const cfg = systemsConfig[system];
       if (!cfg) throw new Error(`Unknown system "${system}" — not present in the systems config`);
 
-      const catalog =
-        cfg.catalogStrategy === 'catalog-json'
-          ? await extractCatalogJsonCatalog(system, cfg, { allowStale: opts.allowStale })
-          : await extractDocgenCatalog(system, cfg);
+      let catalog: SystemCatalog;
+      switch (cfg.catalogStrategy) {
+        case 'catalog-json':
+          catalog = await extractCatalogJsonCatalog(system, cfg, { allowStale: opts.allowStale });
+          break;
+        case 'stencil':
+          catalog = await extractStencilCatalog(system, cfg, { allowStale: opts.allowStale });
+          break;
+        default:
+          catalog = await extractDocgenCatalog(system, cfg);
+      }
 
       if (!cfg.foundationsCss) {
         console.warn(`[extract:${system}] no foundationsCss configured — token-based checks will be limited`);

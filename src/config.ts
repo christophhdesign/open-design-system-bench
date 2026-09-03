@@ -117,3 +117,67 @@ export function requireFile(path: string, hint: string): string {
   }
   return path;
 }
+
+// ---------------------------------------------------------------------------
+// foundationsCss resolution
+// ---------------------------------------------------------------------------
+//
+// foundationsCss is `string | string[]`: a system whose tokens live in one
+// file names that file, and a system that splits them per category (Admiral's
+// Stencil monorepo ships nineteen files under packages/tokens/css/ and only a
+// .scss that `@use`s them) names them all. Every consumer — the extractor's
+// token scan, the audit's tokens check, doctor, the init wizard — goes through
+// these two helpers so the single- and multi-file shapes can never drift apart.
+
+/** Absolute path(s) named by `foundationsCss`, in declaration order. Empty when nothing is configured. */
+export function foundationsCssPaths(cfg: { root: string; foundationsCss?: string | string[] }): string[] {
+  const raw = cfg.foundationsCss;
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.map((rel) => join(cfg.root, rel));
+}
+
+export interface FoundationsCssRead {
+  /** The listed files joined with a newline, in declaration order. */
+  content: string;
+  /** Absolute paths that were read. */
+  read: string[];
+  /** Absolute paths that were configured but could not be read. */
+  missing: string[];
+}
+
+/**
+ * Reads the configured foundations CSS as one concatenated document, or
+ * returns undefined when `foundationsCss` is not configured at all. A
+ * configured-but-unreadable file is reported in `missing` rather than thrown,
+ * so a caller can decide: the extractor treats "every listed file missing" as
+ * a hard error (that is a typo'd path, not a system without tokens), while the
+ * audit degrades to partial credit. Files are joined with a newline so one
+ * lacking a trailing newline can't glue its last declaration onto the next
+ * file's first one.
+ */
+export function readFoundationsCss(cfg: { root: string; foundationsCss?: string | string[] }): FoundationsCssRead | undefined {
+  const paths = foundationsCssPaths(cfg);
+  if (paths.length === 0) return undefined;
+
+  const parts: string[] = [];
+  const read: string[] = [];
+  const missing: string[] = [];
+  for (const path of paths) {
+    try {
+      parts.push(readFileSync(path, 'utf8'));
+      read.push(path);
+    } catch {
+      missing.push(path);
+    }
+  }
+  return { content: parts.join('\n'), read, missing };
+}
+
+/** Human-readable rendering of `foundationsCss` for findings and doctor lines. */
+export function describeFoundationsCss(cfg: { foundationsCss?: string | string[] }): string {
+  const raw = cfg.foundationsCss;
+  if (!raw) return '(none)';
+  if (!Array.isArray(raw)) return raw;
+  return raw.length === 1 ? raw[0] : `${raw.length} files (${raw[0]}, ...)`;
+}
