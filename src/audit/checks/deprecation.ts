@@ -43,8 +43,25 @@ import { readJsonSafe, round1, clamp, findPackageDir } from '../util.ts';
 import { listWorkspacePackages } from '../workspace.ts';
 
 const DEPRECATED_RE = /@deprecated\b/g;
-const VERSION_HEADING_RE = /^##\s+\[?v?\d+\.\d+\.\d+/gm;
-const CHANGELOG_FILENAME_RE = /^changelog.*\.md$/i;
+
+// A machine-readable version heading, in the two shapes real projects write.
+// The semver form (`## 1.2.0`, `## [v2.0.0]`) is the changelog convention; the
+// transition form (`## 30 -> 31`, `## v3 to v4`) is how hand-written migration
+// guides head their sections, and is exactly as parseable. Requiring at least
+// major.minor for the semver form, and two numbers around an arrow/`to` for
+// the transition form, keeps prose headings like "## 2026 in review" out.
+const VERSION_HEADING_RE = /^##\s+\[?v?\d+\.\d+(?:\.\d+)?|^##\s+v?\d+\s*(?:->|-->|→|to)\s*v?\d+/gm;
+
+// Migration documentation an agent can read, in filename-preference order.
+// CHANGELOG is not the only shape: a hand-written MIGRATION.md or UPGRADING.md
+// carries the same information in a more directly actionable form (Admiral
+// ships a 1500-line MIGRATION.md with before/after snippets per deprecation
+// and no CHANGELOG at all, and used to score zero here for it).
+const MIGRATION_DOC_PATTERNS: Array<{ re: RegExp; preferred: string; kind: string }> = [
+  { re: /^changelog.*\.md$/i, preferred: 'CHANGELOG.md', kind: 'changelog' },
+  { re: /^migration.*\.md$/i, preferred: 'MIGRATION.md', kind: 'migration guide' },
+  { re: /^upgrading.*\.md$/i, preferred: 'UPGRADING.md', kind: 'upgrade guide' },
+];
 
 /**
  * Finds a CHANGELOG* file directly inside `dir` (not recursive). Accepts any
@@ -54,17 +71,23 @@ const CHANGELOG_FILENAME_RE = /^changelog.*\.md$/i;
  * "CHANGELOG.md" spelling, then falls back to the alphabetically first
  * match, for a deterministic pick.
  */
-function findChangelogFile(dir: string): string | undefined {
+function findMigrationDoc(dir: string): { file: string; kind: string } | undefined {
   let entries: string[];
   try {
     entries = readdirSync(dir);
   } catch {
     return undefined;
   }
-  const matches = entries.filter((f) => CHANGELOG_FILENAME_RE.test(f));
-  if (matches.length === 0) return undefined;
-  if (matches.includes('CHANGELOG.md')) return 'CHANGELOG.md';
-  return [...matches].sort()[0];
+  // Deterministic across the whole set: changelog wins over migration guide
+  // wins over upgrade guide, and within one kind the plain spelling wins over
+  // a locale-suffixed variant, else the alphabetically first.
+  for (const { re, preferred, kind } of MIGRATION_DOC_PATTERNS) {
+    const matches = entries.filter((f) => re.test(f));
+    if (matches.length === 0) continue;
+    if (matches.includes(preferred)) return { file: preferred, kind };
+    return { file: [...matches].sort()[0], kind };
+  }
+  return undefined;
 }
 
 interface PkgJson {
@@ -116,19 +139,17 @@ export async function checkDeprecation(system: SystemId, cfg: SystemConfig, dirs
   const workspaceChangelogs = workspacePkgs
     .filter((wp) => wp.dir !== pkgDir) // avoid double-naming the components package if it's also a workspace member
     .map((wp) => {
-      const file = findChangelogFile(wp.dir);
-      return file ? { relDir: wp.relDir, file, path: join(wp.dir, file) } : undefined;
+      const found = findMigrationDoc(wp.dir);
+      return found ? { relDir: wp.relDir, file: found.file, kind: found.kind, path: join(wp.dir, found.file) } : undefined;
     })
-    .filter((x): x is { relDir: string; file: string; path: string } => x !== undefined);
+    .filter((x): x is { relDir: string; file: string; kind: string; path: string } => x !== undefined);
 
-  const rootChangelogFile = findChangelogFile(root);
-  const hasRootChangelog = rootChangelogFile !== undefined;
-  const rootChangelogPath = rootChangelogFile ? join(root, rootChangelogFile) : undefined;
-  const componentsChangelogFile = pkgDir ? findChangelogFile(pkgDir) : undefined;
-  const hasComponentsChangelog = componentsChangelogFile !== undefined;
-  const componentsChangelogPath = pkgDir && componentsChangelogFile ? join(pkgDir, componentsChangelogFile) : undefined;
+  const rootDoc = findMigrationDoc(root);
+  const rootChangelogPath = rootDoc ? join(root, rootDoc.file) : undefined;
+  const componentsDoc = pkgDir ? findMigrationDoc(pkgDir) : undefined;
+  const componentsChangelogPath = pkgDir && componentsDoc ? join(pkgDir, componentsDoc.file) : undefined;
   const hasChangeset = existsSync(join(root, '.changeset'));
-  const hasAnyChangelog = hasRootChangelog || hasComponentsChangelog || workspaceChangelogs.length > 0;
+  const hasAnyChangelog = rootDoc !== undefined || componentsDoc !== undefined || workspaceChangelogs.length > 0;
 
   if (hasAnyChangelog || hasChangeset) {
     score += 25; // presence credit — earned once, regardless of how many of the sources above qualify
@@ -138,9 +159,10 @@ export async function checkDeprecation(system: SystemId, cfg: SystemConfig, dirs
   // changelog if it has one (that's the changelog an agent migrating THIS
   // system's components most needs), else whichever changelog was found
   // first (root, then workspace packages in stable relDir order).
-  const scanPath = hasComponentsChangelog
+  const scanPath = componentsDoc
     ? componentsChangelogPath
     : [rootChangelogPath, ...workspaceChangelogs.map((w) => w.path)].find((p): p is string => p !== undefined);
+  const scanKind = componentsDoc?.kind ?? rootDoc?.kind ?? workspaceChangelogs[0]?.kind ?? 'changelog';
 
   if (scanPath) {
     let content = '';
@@ -153,27 +175,27 @@ export async function checkDeprecation(system: SystemId, cfg: SystemConfig, dirs
     const versionHeadings = content.match(VERSION_HEADING_RE) ?? [];
     if (versionHeadings.length > 0) {
       score += 15;
-      findings.push({ severity: 'info', message: `${relLocation} present with ${versionHeadings.length} machine-readable version heading(s).` });
+      findings.push({ severity: 'info', message: `${relLocation} present (${scanKind}) with ${versionHeadings.length} machine-readable version heading(s).` });
     } else {
-      findings.push({ severity: 'warn', message: `${relLocation} present but has no "## <version>" headings an agent can parse for migration context.` });
+      findings.push({ severity: 'warn', message: `${relLocation} present (${scanKind}) but has no "## <version>" headings an agent can parse for migration context.` });
     }
   } else if (hasChangeset) {
     findings.push({
       severity: 'info',
-      message: 'No CHANGELOG*.md found anywhere, but a .changeset/ directory is present (earns changelog-infrastructure credit; run changeset\'s version step to render it into an agent-readable CHANGELOG.md).',
+      message: 'No CHANGELOG/MIGRATION/UPGRADING markdown found anywhere, but a .changeset/ directory is present (earns changelog-infrastructure credit; run changeset\'s version step to render it into an agent-readable CHANGELOG.md).',
     });
   } else {
     findings.push({
       severity: 'warn',
-      message: 'No CHANGELOG*.md at the system root, the components package dir, or any workspace package.',
-      fix: 'A machine-readable changelog is a Tier-1 migration eval prerequisite.',
+      message: 'No CHANGELOG*.md, MIGRATION*.md or UPGRADING*.md at the system root, the components package dir, or any workspace package.',
+      fix: 'A machine-readable changelog or migration guide is a Tier-1 migration eval prerequisite.',
     });
   }
 
   if (workspaceChangelogs.length > 0) {
     findings.push({
       severity: 'info',
-      message: `${workspaceChangelogs.length} workspace package(s) carry their own changelog (e.g. ${workspaceChangelogs[0].relDir}/${workspaceChangelogs[0].file}).`,
+      message: `${workspaceChangelogs.length} workspace package(s) carry their own migration docs (e.g. ${workspaceChangelogs[0].relDir}/${workspaceChangelogs[0].file}).`,
     });
   }
   if (hasChangeset) {

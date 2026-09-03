@@ -834,7 +834,8 @@ test('deprecation credits a CHANGELOG.md found only in a sibling workspace packa
     };
     const result = await checkDeprecation(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
     assert.ok((result.score as number) >= 25, `expected changelog presence credit sourced from the sibling package, got score ${result.score}`);
-    const countFinding = result.findings.find((f) => f.message.includes('workspace package(s) carry their own changelog'));
+    // Wording covers migration guides too, not just changelogs (see MIGRATION_DOC_PATTERNS).
+    const countFinding = result.findings.find((f) => f.message.includes('workspace package(s) carry their own migration docs'));
     assert.ok(countFinding, `expected a workspace-changelog-count finding, got: ${JSON.stringify(result.findings)}`);
     assert.ok(
       countFinding!.message.includes('packages/theme/CHANGELOG.md'),
@@ -1349,6 +1350,141 @@ test('docs-greppability treats a hosted llms.txt too large to read as unmeasured
     assert.equal(result.score, 57.1, `expected the llms term's weight excluded and renormalized, got ${result.score}`);
   } finally {
     await stopServer(server);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Layouts export-hygiene cannot assess, and migration docs that aren't
+// changelogs. Both surfaced on a real Stencil system (Admiral), where
+// export-hygiene printed a measured-looking 60 it had never measured, and a
+// 1500-line MIGRATION.md scored the same as no migration documentation at all.
+// ---------------------------------------------------------------------------
+
+test('export-hygiene withholds its score for a custom-element layout instead of inventing one', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-customel-'));
+  const system = 'stencilkit';
+  try {
+    writeFile(
+      join(root, 'packages/components/package.json'),
+      JSON.stringify({ name: '@stencilkit/components', main: './dist/index.js', types: './dist/types/index.d.ts' }),
+    );
+    // The Stencil shape: no per-dir index.ts, components nested under grouping
+    // dirs, declared by decorator.
+    writeFile(
+      join(root, 'packages/components/src/components/controls/ds-button/ds-button.tsx'),
+      "import { Component } from '@stencil/core';\n@Component({ tag: 'ds-button' })\nexport class DsButton {}\n",
+    );
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_STENCILKIT_DIR',
+      componentsSrc: 'packages/components/src',
+      componentsPkg: '@stencilkit/components',
+      foundationsPkg: '@stencilkit/tokens',
+      // Layout is detected from disk, not declared in config.
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkExportHygiene(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+
+    assert.equal(result.score, null, 'reachability is 70% of this check and cannot be assessed here, so no score is honest');
+    const finding = result.findings.find((f) => f.message.includes('Custom-element layout'));
+    assert.ok(finding, `expected a custom-element layout finding, got: ${JSON.stringify(result.findings)}`);
+    assert.equal(finding!.severity, 'info', 'a custom-element layout is not a defect');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('export-hygiene withholds its score for an unrecognized layout, with a warning', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-nolayout-'));
+  const system = 'nolayoutkit';
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: '@nolayoutkit/components', main: './dist/index.js', types: './dist/index.d.ts' }));
+    writeFile(join(root, 'src/everything.ts'), 'export const Button = 1;\n');
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_NOLAYOUTKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@nolayoutkit/components',
+      foundationsPkg: '@nolayoutkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkExportHygiene(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+
+    // Previously this fell through to a constant 60 (or 30), which printed as
+    // a measured, middling grade when nothing had been measured.
+    assert.equal(result.score, null);
+    const finding = result.findings.find((f) => f.message.includes('Reachability was not assessed'));
+    assert.ok(finding, `expected an unassessed-reachability warning, got: ${JSON.stringify(result.findings)}`);
+    assert.equal(finding!.severity, 'warn');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deprecation credits a MIGRATION.md with major-version transition headings', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-migrationdoc-'));
+  const system = 'migrationkit';
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: '@migrationkit/root' }));
+    writeFile(join(root, 'packages/components/package.json'), JSON.stringify({ name: '@migrationkit/components' }));
+    writeFile(
+      join(root, 'packages/components/src/button/index.ts'),
+      '/** @deprecated Use Button instead. */\nexport const OldButton = 1;\n',
+    );
+    // No CHANGELOG anywhere. The migration guide heads its sections with
+    // major-version transitions ("## 30 -> 31") rather than semver triples.
+    writeFile(
+      join(root, 'packages/components/MIGRATION.md'),
+      '# Migration\n\n## Next\n\nStuff.\n\n## 30 -> 31\n\nMore.\n\n## 29 -> 30\n\nMore.\n',
+    );
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_MIGRATIONKIT_DIR',
+      componentsSrc: 'packages/components/src',
+      componentsPkg: '@migrationkit/components',
+      foundationsPkg: '@migrationkit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkDeprecation(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+
+    // 20 (@deprecated) + 25 (migration doc present) + 15 (parseable headings).
+    assert.equal(result.score, 60);
+    const finding = result.findings.find((f) => f.message.includes('MIGRATION.md'));
+    assert.ok(finding, `expected the migration guide to be named, got: ${JSON.stringify(result.findings)}`);
+    assert.match(finding!.message, /migration guide/, 'the finding should say what kind of doc it scanned');
+    assert.match(finding!.message, /2 machine-readable version heading/, '"## 30 -> 31" style headings are parseable');
+    assert.ok(
+      !result.findings.some((f) => f.severity === 'warn' && f.message.includes('No CHANGELOG')),
+      'a migration guide must not be reported as no migration documentation at all',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('deprecation version-heading matching keeps prose headings out', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-prosehead-'));
+  const system = 'prosekit';
+  try {
+    writeFile(join(root, 'package.json'), JSON.stringify({ name: '@prosekit/root' }));
+    writeFile(join(root, 'CHANGELOG.md'), '# Changes\n\n## 2026 in review\n\nA good year.\n\n## Unreleased\n\nThings.\n');
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_PROSEKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@prosekit/components',
+      foundationsPkg: '@prosekit/foundations',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkDeprecation(system, cfg, { catalogsDir: join(root, 'c'), tokensDir: join(root, 't') });
+    const finding = result.findings.find((f) => f.message.includes('no "## <version>" headings'));
+    assert.ok(finding, `"## 2026 in review" must not count as a version heading, got: ${JSON.stringify(result.findings)}`);
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
