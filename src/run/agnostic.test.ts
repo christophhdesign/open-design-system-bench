@@ -5,10 +5,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import type { BenchConfig, BenchProfile, SystemCatalog, Task } from '../types.ts';
+import type { BenchConfig, BenchProfile, SystemCatalog, SystemConfig, Task } from '../types.ts';
 import { cellKey } from '../types.ts';
 import { expandMatrix } from './matrix.ts';
+import { injectContextForTest } from './fixture.ts';
 import { validateTaskSuite } from '../tasks/load.ts';
 
 // ---------------------------------------------------------------------------
@@ -141,4 +145,90 @@ test('validateTaskSuite errors on a real hiddenExpectations symbol mismatch, on 
   };
   const { errors } = validateTaskSuite([badTask], { acme: acmeCatalog });
   assert.ok(errors.some((e) => e.includes('NotARealComponent')));
+});
+// ---------------------------------------------------------------------------
+// Context injection: skill bundles and globbed docs
+// ---------------------------------------------------------------------------
+
+function writeF(p: string, content: string): void {
+  mkdirSync(join(p, '..'), { recursive: true });
+  writeFileSync(p, content);
+}
+
+test('injectContext finds skills whether skillDirs names a bundle or a directory of bundles', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-skills-'));
+  const dest = mkdtempSync(join(tmpdir(), 'odsys-skills-dest-'));
+  try {
+    writeF(join(root, 'AGENTS.md'), '# agents\n');
+    // A container of bundles — the shape that used to land one level too deep
+    // and make every skill invisible to the agent.
+    writeF(join(root, '.agents/skills/accessibility/SKILL.md'), '# a11y\n');
+    writeF(join(root, '.agents/skills/component-api/SKILL.md'), '# api\n');
+    // A single bundle, named directly.
+    writeF(join(root, 'tooling/one-skill/SKILL.md'), '# one\n');
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'ODSYS_SKILLS_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@fake/ui',
+      foundationsPkg: '@fake/tokens',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: ['AGENTS.md'], skillDirs: ['.agents/skills', 'tooling/one-skill'] },
+    };
+    injectContextForTest(cfg, 'skill', dest);
+
+    // Discoverable means .claude/skills/<name>/SKILL.md exactly.
+    for (const name of ['accessibility', 'component-api', 'one-skill']) {
+      assert.ok(
+        existsSync(join(dest, '.claude', 'skills', name, 'SKILL.md')),
+        `${name} must be discoverable at .claude/skills/${name}/SKILL.md`,
+      );
+    }
+    assert.ok(
+      !existsSync(join(dest, '.claude', 'skills', 'skills')),
+      'a container directory must not become a skill level of its own',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+test('injectContext expands an extraDocs glob and preserves the tree', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-docs-'));
+  const dest = mkdtempSync(join(tmpdir(), 'odsys-docs-dest-'));
+  try {
+    writeF(join(root, 'AGENTS.md'), '# agents\n');
+    writeF(join(root, 'pkg/INDEX.md'), 'see [card](src/card/readme.md)\n');
+    writeF(join(root, 'pkg/src/card/readme.md'), '# card\n');
+    writeF(join(root, 'pkg/src/alert/readme.md'), '# alert\n');
+    writeF(join(root, 'pkg/src/card/card.tsx'), 'export const x = 1;\n');
+    writeF(join(root, 'pkg/src/huge.png'), 'binary-ish\n');
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'ODSYS_DOCS_DIR',
+      componentsSrc: 'pkg/src',
+      componentsPkg: '@fake/ui',
+      foundationsPkg: '@fake/tokens',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: ['AGENTS.md'], extraDocs: ['pkg/*.md', 'pkg/src/**/readme.md'] },
+    };
+    injectContextForTest(cfg, 'skill', dest);
+
+    // Structure is preserved, so INDEX.md's relative link to its sibling
+    // readme resolves inside the workspace. Flattening to basename would
+    // collapse both readme.md files onto one another.
+    assert.ok(existsSync(join(dest, 'docs/pkg/INDEX.md')));
+    assert.ok(existsSync(join(dest, 'docs/pkg/src/card/readme.md')));
+    assert.ok(existsSync(join(dest, 'docs/pkg/src/alert/readme.md')));
+    // The glob copies what it names and nothing else: no implementation
+    // source, no image assets an npm consumer would never receive.
+    assert.ok(!existsSync(join(dest, 'docs/pkg/src/card/card.tsx')));
+    assert.ok(!existsSync(join(dest, 'docs/pkg/src/huge.png')));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
 });
