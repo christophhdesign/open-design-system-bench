@@ -31,6 +31,26 @@ source and is not part of the shipped repo.
   results.json). `src/audit/convention-lexicon.json` is an **empirical data artifact**: names AI
   models invented across 898 graded generations (6 model configs, 2 production design systems).
   Do not edit its data by hand; extend it only with new mined evidence.
+- **Three catalog strategies.** `docgen` (react-docgen-typescript over a walked barrel),
+  `catalog-json` (the system ships this repo's own catalog shape), and `stencil`
+  (`src/extract/catalog-stencil.ts`, reading the docs.json a Stencil build emits from its
+  `docs-json` output target). A Stencil library defeats docgen on three counts and none are
+  fixable in the resolver: its barrel re-exports a *virtual* `./components` module the compiler
+  synthesizes at build time, its components are `@Prop()` classes rather than React components,
+  and its component dirs nest arbitrarily deep. `stencil` records the custom-element tag as the
+  documented export and the derived PascalCase class name as a second gradeable spelling in
+  allExports only, plus kebab attribute and event-handler prop aliases in allPropsByExport only.
+  Do not promote those alias spellings into `components[].exports`: that array is the
+  *documented* surface the audit's per-export checks read, and doubling it made docs-greppability
+  report every PascalCase name as undocumented (which it always is: a Stencil system's prose
+  documents the tag). Staleness is checked by scanning componentsSrc recursively for `@Component(`
+  tags, not by the flat readdir `catalog-json` uses.
+- **`foundationsCss` takes one path or a list.** Plenty of systems ship one file per token
+  category with no aggregate CSS entry point (Admiral: nineteen files under `packages/tokens/css/`,
+  aggregated only by a `.scss` that `@use`s them). A list is read as one concatenated document, so
+  cssVars/utilities are the union and cssHash covers the lot. Go through `readFoundationsCss` /
+  `foundationsCssPaths` / `describeFoundationsCss` in `src/config.ts` rather than reading
+  `cfg.foundationsCss` directly, so the single- and multi-file shapes cannot drift apart.
 - **`init`, npm-consume fixtures, and `leaderboard`.** The `init` wizard
   (`src/init/wizard.ts`) works interactively and non-interactively, wired as the `init` CLI
   command. `consume: 'npm'` fixture mode uses the generic template in `fixtures/npm-app/`, with
@@ -111,7 +131,7 @@ src/cli.ts               all commands: doctor|init|extract|validate-tasks|run|gr
                          report|compare|leaderboard|ci|prune|audit
 src/config.ts            config + .env loading, dir resolution
 src/types.ts             every shared contract (SystemId, SystemConfig, CellSpec, EvalResult, ...)
-src/extract/             catalog-docgen, catalog-json, tokens, normalize
+src/extract/             catalog-docgen, catalog-json, catalog-stencil, tokens, normalize
 src/tasks/               schema + load + suite validation (leak linter)
 src/run/                 matrix, fixture, collect, runner (pause/resume lives here)
 src/agents/              claude-code (agentic), api-oneshot (single-shot), codex (stub), errors

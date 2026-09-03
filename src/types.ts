@@ -41,10 +41,25 @@ export interface SystemConfig {
   componentsSrc: string; // relative to root
   componentsPkg: string; // e.g. "@your-scope/components"
   foundationsPkg: string;
-  /** Path (relative to root) to the foundations CSS file tokens are parsed from. Omit if the system has no CSS-custom-property token file — token/contamination checks that depend on it are skipped, and `doctor` warns. */
-  foundationsCss?: string;
-  catalogStrategy: 'docgen' | 'catalog-json';
-  /** Path (relative to root) to a pre-built machine-readable component catalog JSON file. Required (and only used) by the 'catalog-json' strategy. */
+  /**
+   * Path(s) (relative to root) to the foundations CSS the token set is parsed
+   * from. Accepts an array because plenty of systems split their tokens across
+   * one file per category (Admiral ships nineteen: palette.css, spacing.css,
+   * radius.css, ...) with no aggregate CSS entry point — only a .scss that
+   * `@use`s them, which is not something a dumb line scan should be asked to
+   * resolve. Listed files are read in order and treated as one concatenated
+   * document, so cssVars/utilities are the union and cssHash covers the lot.
+   * Omit entirely if the system has no CSS-custom-property token file — the
+   * token/contamination checks that depend on it are skipped, and `doctor` warns.
+   */
+  foundationsCss?: string | string[];
+  catalogStrategy: 'docgen' | 'catalog-json' | 'stencil';
+  /**
+   * Path (relative to root) to a pre-built machine-readable component catalog
+   * JSON file. Required by both the 'catalog-json' strategy (which expects
+   * this repo's own catalog shape) and the 'stencil' strategy (which expects
+   * the docs.json emitted by Stencil's `docs-json` output target).
+   */
   catalogFile?: string;
   agentContext: {
     agentsMd: string[]; // files copied at context level "agents-md" (relative to root)
