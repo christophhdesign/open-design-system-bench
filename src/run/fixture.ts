@@ -25,13 +25,14 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { PKG_ROOT, paths } from '../config.ts';
 import type { ContextLevel, SystemConfig, SystemId } from '../types.ts';
@@ -208,21 +209,157 @@ function injectAgentsMd(systemCfg: SystemConfig, destDir: string): void {
   });
 }
 
-/** Copies each configured skillDir into destDir/.claude/skills/<dirname>/. */
+/**
+ * Copies each configured skillDir into destDir/.claude/skills/, where an
+ * agent can actually discover it — that is, as `.claude/skills/<name>/SKILL.md`.
+ *
+ * A configured path can reasonably be either shape, and the difference is one
+ * directory level, which is the whole ballgame: a skill nested one level too
+ * deep is not found, and the run silently measures an unskilled agent at the
+ * context level whose entire purpose is measuring a skilled one. Admiral
+ * declares `.agents/skills`, a directory OF eighteen skill bundles, and every
+ * one of them landed at `.claude/skills/skills/<name>/SKILL.md` and was
+ * invisible.
+ *
+ * So detect rather than assume: a directory holding its own SKILL.md is one
+ * bundle and keeps its name; otherwise it is a container and each child bundle
+ * is copied under its own name. A container whose children are not bundles
+ * either is copied verbatim rather than silently dropped — better to hand the
+ * agent the files and let the context level be judged on them.
+ */
 function injectSkillDirs(systemCfg: SystemConfig, destDir: string): void {
-  for (const dir of systemCfg.agentContext.skillDirs ?? []) {
-    const src = join(systemCfg.root, dir);
-    const dest = join(destDir, '.claude', 'skills', basename(dir));
+  const skillsRoot = join(destDir, '.claude', 'skills');
+  const copyBundle = (src: string, name: string) => {
+    const dest = join(skillsRoot, name);
     mkdirSync(dest, { recursive: true });
     cpSync(src, dest, { recursive: true });
+  };
+
+  for (const dir of systemCfg.agentContext.skillDirs ?? []) {
+    const src = join(systemCfg.root, dir);
+    if (existsSync(join(src, 'SKILL.md'))) {
+      copyBundle(src, basename(dir)); // a single skill bundle
+      continue;
+    }
+    let children: string[] = [];
+    try {
+      children = readdirSync(src, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && existsSync(join(src, e.name, 'SKILL.md')))
+        .map((e) => e.name);
+    } catch {
+      // unreadable — fall through to the verbatim copy below
+    }
+    if (children.length > 0) {
+      for (const child of children) copyBundle(join(src, child), child);
+      continue;
+    }
+    copyBundle(src, basename(dir));
   }
 }
 
-/** Copies each configured extraDocs file/dir into destDir/docs/, then points CLAUDE.md at it. */
+// A local glob matcher rather than node:fs globSync: that API exists on the
+// Node 22 this project runs, but @types/node is pinned to ^20 and does not
+// declare it, and bumping a dependency to reach one call is a worse trade than
+// twenty lines. Supports the two wildcards a docs glob needs — `*` within a
+// path segment, `**` spanning segments.
+const GLOB_WALK_MAX_FILES = 20_000;
+
+/** Anchored regex for a posix-style glob, matched against root-relative paths. */
+function globToRegExp(pattern: string): RegExp {
+  let out = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i];
+    if (ch === '*') {
+      const doubled = pattern[i + 1] === '*';
+      if (doubled && pattern[i + 2] === '/') {
+        out += '(?:[^/]+/)*'; // `**/` — zero or more directories
+        i += 2;
+      } else if (doubled) {
+        out += '.*';
+        i += 1;
+      } else {
+        out += '[^/]*'; // `*` — within one segment
+      }
+      continue;
+    }
+    out += ch.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** The literal directory prefix of a glob, i.e. everything before the first wildcard segment. */
+function globBaseDir(pattern: string): string {
+  const segments = pattern.split('/');
+  const literal: string[] = [];
+  for (const seg of segments) {
+    if (seg.includes('*')) break;
+    literal.push(seg);
+  }
+  // Drop a trailing filename-looking segment only when it is the whole pattern.
+  return literal.length === segments.length ? literal.slice(0, -1).join('/') : literal.join('/');
+}
+
+/**
+ * Root-relative paths of every file under `root` matching `pattern`. Walks
+ * only the glob's literal prefix rather than the whole checkout, skipping
+ * vendor/build and dot directories. Best-effort and capped: a docs glob must
+ * never hang or explode a provision step.
+ */
+function globFiles(root: string, pattern: string): string[] {
+  const re = globToRegExp(pattern);
+  const out: string[] = [];
+  const walk = (relDir: string): void => {
+    if (out.length >= GLOB_WALK_MAX_FILES) return;
+    let entries;
+    try {
+      entries = readdirSync(join(root, relDir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= GLOB_WALK_MAX_FILES) return;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist') continue;
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(rel);
+      else if (entry.isFile() && re.test(rel)) out.push(rel);
+    }
+  };
+  walk(globBaseDir(pattern));
+  return out.sort();
+}
+
+/**
+ * Copies each configured extraDocs entry into destDir/docs/, then points
+ * CLAUDE.md at it. Two shapes, because real doc sets need both:
+ *
+ *   - A literal file or directory path lands at `docs/<basename>`, flattened.
+ *     This is the original behavior and existing configs depend on it.
+ *   - A glob (any entry containing `*`) copies every match to
+ *     `docs/<path relative to root>`, preserving structure. Flattening is not
+ *     an option there: a hundred files all named readme.md would overwrite
+ *     each other down to one, and an index that links to its siblings by
+ *     relative path only resolves if the tree is kept intact.
+ *
+ * Globs exist because the interesting documentation is often scattered
+ * through the source tree rather than gathered in a docs directory. Admiral's
+ * per-component API tables live at src/components/<group>/<tag>/readme.md —
+ * 487 KB across 110 files, inside a 26 MB tree that is mostly image assets.
+ * Naming the directory would copy all 26 MB and hand the agent the .tsx
+ * implementation an npm consumer never sees; naming 110 literal paths is not
+ * a config anyone maintains.
+ */
 function injectExtraDocs(systemCfg: SystemConfig, destDir: string): void {
   const docsDir = join(destDir, 'docs');
   mkdirSync(docsDir, { recursive: true });
   for (const docPath of systemCfg.agentContext.extraDocs ?? []) {
+    if (docPath.includes('*')) {
+      for (const rel of globFiles(systemCfg.root, docPath)) {
+        const dest = join(docsDir, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        cpSync(join(systemCfg.root, rel), dest, { recursive: true });
+      }
+      continue;
+    }
     const src = join(systemCfg.root, docPath);
     const dest = join(docsDir, basename(docPath));
     cpSync(src, dest, { recursive: true });
@@ -234,6 +371,11 @@ function injectExtraDocs(systemCfg: SystemConfig, destDir: string): void {
     'Component API reference and token list live in docs/ — consult them before writing UI.\n';
   const existing = existsSync(claudeMdPath) ? readFileSync(claudeMdPath, 'utf8') : '';
   writeFileSync(claudeMdPath, `${existing}\n${note}`, 'utf8');
+}
+
+/** injectContext, exported for tests: context injection is otherwise only reachable through a full provision, which needs a prepared template. */
+export function injectContextForTest(systemCfg: SystemConfig, context: ContextLevel, destDir: string): void {
+  injectContext(systemCfg, context, destDir);
 }
 
 function injectContext(systemCfg: SystemConfig, context: ContextLevel, destDir: string): void {
