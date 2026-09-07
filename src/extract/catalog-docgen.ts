@@ -32,7 +32,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parse } from '@babel/parser';
-import type { ExportSpecifier } from '@babel/types';
+import type { ExportNamespaceSpecifier, ExportSpecifier } from '@babel/types';
 import { withCompilerOptions } from 'react-docgen-typescript';
 import type { ComponentDoc, ParserOptions, PropItem } from 'react-docgen-typescript';
 import ts from 'typescript';
@@ -236,6 +236,16 @@ function collectBarrelDirs(
     if (node.exportKind === 'type') continue; // whole `export type { ... } from` block
     const names: string[] = [];
     for (const spec of node.specifiers) {
+      if (spec.type === 'ExportNamespaceSpecifier') {
+        // `export * as Dialog from './namespace'`: the whole target module is
+        // bound to one public name. Treat that name like an explicit named
+        // re-export of its target dir — see collectPublicComponentNames for
+        // the far more common case (this same shape one level down, inside a
+        // per-component dir's own index.ts).
+        const s = spec as ExportNamespaceSpecifier;
+        if (/^[A-Z]/.test(s.exported.name)) names.push(s.exported.name);
+        continue;
+      }
       if (spec.type !== 'ExportSpecifier') continue;
       const s = spec as ExportSpecifier;
       if (s.exportKind === 'type') continue; // inline `type X` within a mixed export list
@@ -294,6 +304,20 @@ function collectPublicComponentNames(moduleFile: string, visited: Set<string> = 
       continue;
     }
     for (const spec of node.specifiers) {
+      if (spec.type === 'ExportNamespaceSpecifier') {
+        // `export * as Dialog from './namespace'` (the Chakra UI v3 shape,
+        // 58 occurrences field-tested): the whole namespace target is bound
+        // to one public value name. That name is a real, importable part of
+        // the public API even though it isn't itself a docgen-documentable
+        // component — the caller's "docgen could not extract props"
+        // fallback (extractDocgenCatalog) covers it once it's in `names`.
+        // Deliberately NOT recursing into the namespace target to expand
+        // `Dialog.Root`-style members — the apiFidelity grader's sub-component
+        // path already handles those via the head identifier alone.
+        const s = spec as ExportNamespaceSpecifier;
+        if (/^[A-Z]/.test(s.exported.name)) names.push(s.exported.name);
+        continue;
+      }
       if (spec.type !== 'ExportSpecifier') continue;
       const s = spec as ExportSpecifier;
       if (s.exportKind === 'type') continue; // inline `type X` within a mixed export list
@@ -373,11 +397,28 @@ const propFilter: ParserOptions['propFilter'] = (prop) => {
   return true;
 };
 
+// react-docgen-typescript's default name resolution (computeComponentName)
+// prefers a runtime `Foo.displayName = '...'` literal over the exported
+// symbol's own name when one is present, via a heuristic that depends on how
+// many file-scope consts the source file happens to declare. Mantine sets
+// `Paper.displayName = '@mantine/core/Paper'` on 119 components, so
+// comp.displayName came back as '@mantine/core/Paper' and the
+// `publicNames.has(comp.displayName)` check below (built from the barrel's
+// real exported names) silently downgraded fully extractable components
+// (Paper: 74 props, Modal: 105) to the no-props fallback entry. Resolve to the
+// exported symbol's own name instead; returning undefined for the literal
+// 'default' binding keeps docgen's filename-based fallback for default exports.
+const componentNameResolver: ParserOptions['componentNameResolver'] = (exp) => {
+  const n = exp.getName();
+  return n === 'default' ? undefined : n;
+};
+
 const parserOptions: ParserOptions = {
   savePropValueAsString: true,
   shouldExtractLiteralValuesFromEnum: true,
   shouldRemoveUndefinedFromOptional: true,
   propFilter,
+  componentNameResolver,
 };
 
 /**

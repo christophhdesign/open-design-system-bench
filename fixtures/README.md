@@ -48,7 +48,7 @@ Then point at it from your system's entry in `systems.config.json`:
 
 ## Placeholders
 
-At provision time the harness substitutes three placeholders across `vite.config.ts`,
+At provision time the harness substitutes these placeholders across `vite.config.ts`,
 `tsconfig.json`, `index.html`, `src/App.tsx` and `src/main.tsx`:
 
 | Placeholder | Filled with |
@@ -56,11 +56,46 @@ At provision time the harness substitutes three placeholders across `vite.config
 | `__SYSTEM_ROOT__` | absolute path to the design system checkout, forward slashes on every platform |
 | `__COMPONENTS_PKG__` | `componentsPkg` from the system config |
 | `__FOUNDATIONS_PKG__` | `foundationsPkg` from the system config |
+| `__COMPONENTS_SRC__` | `componentsSrc` from the system config (relative to `__SYSTEM_ROOT__`) |
+| `__FOUNDATIONS_CSS__` | `foundationsCss` from the system config (relative to `__SYSTEM_ROOT__`), or a harmless dead value when the system has no `foundationsCss` |
 
-Note what is **not** substituted: where the components sit *inside* the checkout. `source-app`
-hardcodes a `packages/components/src` layout in its tsconfig paths and Vite aliases. A system that
-keeps components anywhere else needs its own template, even when nothing else about it is unusual.
-That is the most common reason to end up with a local fixture.
+`src/main.tsx`'s foundations stylesheet import is dropped entirely (not just pointed at a dead
+path) when `foundationsCss` is unset, mirroring how the npm-consume template drops its `cssEntry`
+import when that is unset.
+
+`__COMPONENTS_SRC__` and `__FOUNDATIONS_CSS__` mean `source-app` resolves whatever layout
+`componentsSrc`/`foundationsCss` describe, not only `packages/components/src`. What still isn't
+config-driven is a system's *deep-import convention* (some systems support
+`import { Button } from '@scope/components/button'` with a bespoke subpath shape) and anything
+about the repo beyond path layout — see "Getting a local template right" below for what else a
+local fixture typically needs to get right.
+
+## Docs and skills at the guided context levels
+
+`agentContext.extraDocs` and `agentContext.skillDirs` are injected at the `skill` context level.
+Two things about them are easy to get wrong:
+
+**A skill has to land where an agent looks for it**, which is
+`.claude/skills/<name>/SKILL.md`. `skillDirs` accepts either a single skill bundle or a directory
+containing several, and the harness tells them apart by looking for a `SKILL.md`. A path naming a
+directory *of* bundles used to be copied wholesale, putting every skill one level too deep and
+making all of them invisible.
+
+**`extraDocs` accepts globs**, and an entry containing `*` behaves differently from a literal path:
+
+| Entry | Lands at |
+|---|---|
+| `pkg/COMPONENTS.md` | `docs/COMPONENTS.md`, flattened to its basename |
+| `pkg/src/**/readme.md` | `docs/pkg/src/**/readme.md`, tree preserved |
+
+Globs preserve structure because flattening cannot work for them: a hundred files all named
+`readme.md` would overwrite each other down to one, and an index that links to its siblings by
+relative path only resolves if the tree is intact. Reach for a glob when the documentation worth
+giving the agent is scattered through the source tree rather than gathered in a docs directory -
+per-component API tables are the common case, and naming the parent directory instead would copy
+the entire implementation alongside them. A literal path that does not exist fails the provision; a
+glob that matches nothing cannot, so it is warned about by name instead. Watch for that warning,
+because the run continues either way and the agent is the one left short.
 
 ## Getting a local template right
 

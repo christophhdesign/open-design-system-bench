@@ -24,6 +24,12 @@ export const USAGE_LIMIT_PATTERNS: RegExp[] = [
   /spend limit/i,
   /usage-credits/i,
   /insufficient credits/i,
+  // Subscription session/weekly caps ("You've hit your session limit · resets
+  // 2am (Europe/Berlin)") — seen live 2026-09-03; note "resets 2am" has no "at",
+  // so /resets at/ above did not match and 25 cells burned as agent-error.
+  /session limit/i,
+  /hit your (?:\w+ )*limit/i,
+  /resets (?:at )?\d/i,
 ];
 
 export function looksLikeUsageLimit(text: string | undefined | null): boolean {
