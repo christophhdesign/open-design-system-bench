@@ -25,7 +25,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import { tokensPath } from '../../config.ts';
+import { describeFoundationsCss, readFoundationsCss, tokensPath } from '../../config.ts';
 import type { SystemConfig, SystemId, SystemTokens } from '../../types.ts';
 import type { AuditCheckResult, AuditDirs, AuditFinding } from '../types.ts';
 import { walkFiles } from '../fs-walk.ts';
@@ -111,13 +111,18 @@ interface CssScan {
   hasDarkSignal: boolean;
 }
 
-function scanFoundationsCss(cssPath: string): CssScan | undefined {
-  let content: string;
-  try {
-    content = readFileSync(cssPath, 'utf8');
-  } catch {
-    return undefined;
-  }
+/**
+ * Scans the system's configured foundations CSS. `foundationsCss` may name one
+ * file or several (a per-category token set with no aggregate entry point);
+ * readFoundationsCss concatenates them, so the counts here are the union and
+ * the light/dark signal is found wherever it lives. Returns undefined when
+ * nothing is configured or not one listed file could be read — the caller
+ * falls back to the extracted snapshot and, failing that, partial credit.
+ */
+function scanFoundationsCss(cfg: SystemConfig): CssScan | undefined {
+  const css = readFoundationsCss(cfg);
+  if (!css || css.read.length === 0) return undefined;
+  const content = css.content;
   let varCount = 0;
   let semanticCount = 0;
   for (const line of content.split(/\r?\n/)) {
@@ -256,7 +261,7 @@ export async function checkTokens(system: SystemId, cfg: SystemConfig, dirs: Aud
   let cssScan: CssScan | undefined;
 
   if (cfg.foundationsCss) {
-    cssScan = scanFoundationsCss(join(cfg.root, cfg.foundationsCss));
+    cssScan = scanFoundationsCss(cfg);
   }
   if (cssScan) {
     varCount = cssScan.varCount;
@@ -284,7 +289,7 @@ export async function checkTokens(system: SystemId, cfg: SystemConfig, dirs: Aud
       findings.push({
         severity: 'fail',
         message: cfg.foundationsCss
-          ? `No CSS custom properties found in ${cfg.foundationsCss}.`
+          ? `No CSS custom properties found in ${describeFoundationsCss(cfg)}.`
           : 'No foundationsCss configured and no extracted tokens snapshot found.',
       });
     }

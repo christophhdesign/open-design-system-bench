@@ -53,6 +53,25 @@ const FOUNDATIONS_CSS_PLACEHOLDER = '__FOUNDATIONS_CSS__';
 // corresponding import is dropped from main.tsx by applyFoundationsCssPlaceholder,
 // so this is a harmless, self-explaining dead mapping rather than a real path.
 const FOUNDATIONS_CSS_FALLBACK = 'foundations-css-not-configured.css';
+
+/**
+ * The one foundations stylesheet this template can alias, or undefined when
+ * there is none. `foundationsCss` may name several files — a system that
+ * splits tokens one file per category with no aggregate entry point (see
+ * config.ts) — and the extractor and the audit read those as a single
+ * concatenated document. This template cannot: `<foundationsPkg>/index.css`
+ * resolves to exactly one path under the system's own checkout, and a fixture
+ * has no business writing an aggregate into someone else's repo to invent one.
+ * So a multi-file system provisions the way a system with no foundationsCss
+ * does, dead alias and no import, which costs the fixture its stylesheet but
+ * not its grade: every dimension reads source text, not rendered CSS.
+ */
+function aliasableFoundationsCss(cfg: SystemConfig): string | undefined {
+  const raw = cfg.foundationsCss;
+  if (!raw) return undefined;
+  if (!Array.isArray(raw)) return raw;
+  return raw.length === 1 ? raw[0] : undefined;
+}
 const SUBSTITUTED_FILES = ['vite.config.ts', 'tsconfig.json', 'index.html', 'src/App.tsx', 'src/main.tsx'];
 const CSS_ENTRY_PLACEHOLDER = '__CSS_ENTRY__';
 const FOUNDATIONS_CSS_ENTRY_PLACEHOLDER = '__FOUNDATIONS_CSS_ENTRY__';
@@ -132,15 +151,21 @@ export function applyCssEntryPlaceholder(destDir: string, cssEntry: string | und
  * imports a real npm specifier for the foundations stylesheet — it imports
  * `${foundationsPkg}/index.css`, a bare specifier that vite.config.ts/
  * tsconfig.json alias straight at __SYSTEM_ROOT__/__FOUNDATIONS_CSS__ — so
- * when cfg.foundationsCss is unset the import is dropped entirely rather than
- * rewritten, leaving those aliases pointing at nothing but never resolved.
+ * when there is no single file to alias the import is dropped entirely rather
+ * than rewritten, leaving those aliases pointing at nothing but never resolved.
  */
 export function applyFoundationsCssPlaceholder(destDir: string, cfg: SystemConfig): void {
-  applyImportLinePlaceholder(
-    destDir,
-    FOUNDATIONS_CSS_ENTRY_PLACEHOLDER,
-    cfg.foundationsCss ? `${cfg.foundationsPkg}/index.css` : undefined,
-  );
+  const aliasable = aliasableFoundationsCss(cfg);
+  if (!aliasable && Array.isArray(cfg.foundationsCss) && cfg.foundationsCss.length > 1) {
+    // Loud, because the agent is about to see an unstyled app and nothing
+    // else in the run would say why.
+    console.warn(
+      `[fixture] foundationsCss names ${cfg.foundationsCss.length} files and the source template can alias only one, ` +
+        `so this workspace provisions without the design system's stylesheet. Name an aggregate CSS entry point here, ` +
+        `or point fixtureTemplate at a template that imports the files itself.`,
+    );
+  }
+  applyImportLinePlaceholder(destDir, FOUNDATIONS_CSS_ENTRY_PLACEHOLDER, aliasable ? `${cfg.foundationsPkg}/index.css` : undefined);
 }
 
 /**
@@ -221,7 +246,7 @@ export function substitutePlaceholders(destDir: string, cfg: SystemConfig): void
       .split(COMPONENTS_PKG_PLACEHOLDER).join(cfg.componentsPkg)
       .split(FOUNDATIONS_PKG_PLACEHOLDER).join(cfg.foundationsPkg)
       .split(COMPONENTS_SRC_PLACEHOLDER).join(cfg.componentsSrc)
-      .split(FOUNDATIONS_CSS_PLACEHOLDER).join(cfg.foundationsCss ?? FOUNDATIONS_CSS_FALLBACK);
+      .split(FOUNDATIONS_CSS_PLACEHOLDER).join(aliasableFoundationsCss(cfg) ?? FOUNDATIONS_CSS_FALLBACK);
     writeFileSync(filePath, next, 'utf8');
   }
 }

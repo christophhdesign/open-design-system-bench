@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { paths } from '../config.ts';
+import { foundationsCssPaths, paths } from '../config.ts';
 import { collectBarrelExports } from '../extract/normalize.ts';
 import type { SystemConfig, SystemId, SystemsConfig } from '../types.ts';
 
@@ -49,8 +49,8 @@ export interface InitAnswers {
   agentsMd?: string[];
   /** Skill bundle dirs injected at context level "skill", relative to root. */
   skillDirs?: string[];
-  catalogStrategy?: 'docgen' | 'catalog-json' | 'none';
-  /** Required (semantically) when catalogStrategy is "catalog-json"; path relative to root. */
+  catalogStrategy?: 'docgen' | 'catalog-json' | 'stencil' | 'none';
+  /** Required (semantically) when catalogStrategy is "catalog-json" or "stencil"; path relative to root. */
   catalogFile?: string;
 }
 
@@ -310,7 +310,7 @@ async function gatherInteractive(preset: Partial<InitAnswers> | undefined, cwd: 
     const skillDirsRaw = await ask(rl, 'Skill dirs (comma-separated, optional)', (preset?.skillDirs ?? []).join(','));
     const catalogStrategyRaw = await ask(
       rl,
-      'Catalog strategy (docgen|catalog-json|none)',
+      'Catalog strategy (docgen|catalog-json|stencil|none)',
       preset?.catalogStrategy ?? (consume === 'npm' ? 'none' : 'docgen'),
     );
     const catalogStrategy = normalizeCatalogStrategy(catalogStrategyRaw);
@@ -318,6 +318,8 @@ async function gatherInteractive(preset: Partial<InitAnswers> | undefined, cwd: 
     let catalogFile: string | undefined;
     if (catalogStrategy === 'catalog-json') {
       catalogFile = await ask(rl, 'Path to the pre-built catalog JSON (relative to root)', preset?.catalogFile ?? '');
+    } else if (catalogStrategy === 'stencil') {
+      catalogFile = await ask(rl, "Path to Stencil's docs.json (relative to root)", preset?.catalogFile ?? '');
     }
 
     return {
@@ -356,8 +358,8 @@ function splitList(raw: string): string[] {
     .filter(Boolean);
 }
 
-function normalizeCatalogStrategy(raw: string): 'docgen' | 'catalog-json' | 'none' {
-  return raw === 'docgen' || raw === 'catalog-json' || raw === 'none' ? raw : 'none';
+function normalizeCatalogStrategy(raw: string): 'docgen' | 'catalog-json' | 'stencil' | 'none' {
+  return raw === 'docgen' || raw === 'catalog-json' || raw === 'stencil' || raw === 'none' ? raw : 'none';
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +450,8 @@ function buildSystemConfig(answers: InitAnswers, cwd: string): SystemConfig {
   // 'none' (not chosen yet) and unset both fall back to a schema-valid
   // 'docgen' placeholder — SystemConfig.catalogStrategy has no "none" value.
   // doctorGradeChecks flags this so it isn't mistaken for a real choice.
-  const catalogStrategy: 'docgen' | 'catalog-json' = answers.catalogStrategy === 'catalog-json' ? 'catalog-json' : 'docgen';
+  const catalogStrategy: 'docgen' | 'catalog-json' | 'stencil' =
+    answers.catalogStrategy === 'catalog-json' || answers.catalogStrategy === 'stencil' ? answers.catalogStrategy : 'docgen';
 
   const cfg: SystemConfig = {
     root,
@@ -463,7 +466,7 @@ function buildSystemConfig(answers: InitAnswers, cwd: string): SystemConfig {
   };
 
   if (answers.foundationsCss) cfg.foundationsCss = answers.foundationsCss;
-  if (catalogStrategy === 'catalog-json' && answers.catalogFile) cfg.catalogFile = answers.catalogFile;
+  if (catalogStrategy !== 'docgen' && answers.catalogFile) cfg.catalogFile = answers.catalogFile;
   if (answers.skillDirs?.length) cfg.agentContext.skillDirs = answers.skillDirs;
   if (answers.consume === 'npm') {
     cfg.consume = 'npm';
@@ -527,22 +530,36 @@ function doctorGradeChecks(answers: InitAnswers, cfg: SystemConfig): string[] {
         ? `  ok   tsconfig found for docgen: ${tsconfigPath}`
         : `  warn tsconfig not found at ${tsconfigPath} — react-docgen-typescript needs one there (see catalog-docgen.ts)`,
     );
-  } else if (cfg.catalogStrategy === 'catalog-json') {
+  } else {
+    // Both file-backed strategies ('catalog-json' and 'stencil') need
+    // catalogFile; only the hint for regenerating it differs.
+    const what = cfg.catalogStrategy === 'stencil' ? "Stencil's docs.json" : 'the pre-built catalog JSON';
     if (!cfg.catalogFile) {
-      lines.push('  warn catalogStrategy is "catalog-json" but no catalogFile is set — edit systems.config.json');
+      lines.push(`  warn catalogStrategy is "${cfg.catalogStrategy}" but no catalogFile is set — point it at ${what} in systems.config.json`);
     } else {
       const catalogFilePath = join(cfg.root, cfg.catalogFile);
       lines.push(
         existsSync(catalogFilePath)
           ? `  ok   catalogFile exists: ${catalogFilePath}`
-          : `  warn catalogFile not found: ${catalogFilePath}`,
+          : `  warn catalogFile not found: ${catalogFilePath} — regenerate ${what}`,
+      );
+    }
+    if (cfg.catalogStrategy === 'stencil') {
+      const srcDir = join(cfg.root, cfg.componentsSrc);
+      lines.push(
+        existsSync(srcDir)
+          ? `  ok   componentsSrc exists: ${srcDir}`
+          : `  warn componentsSrc not found: ${srcDir} — the stencil staleness scan reads it`,
       );
     }
   }
 
   if (cfg.foundationsCss) {
-    const cssPath = join(cfg.root, cfg.foundationsCss);
-    lines.push(existsSync(cssPath) ? `  ok   foundationsCss exists: ${cssPath}` : `  warn foundationsCss not found: ${cssPath}`);
+    // foundationsCss may name one file or several — report each one, so a
+    // nineteen-file token set that is missing exactly one names that one.
+    for (const cssPath of foundationsCssPaths(cfg)) {
+      lines.push(existsSync(cssPath) ? `  ok   foundationsCss exists: ${cssPath}` : `  warn foundationsCss not found: ${cssPath}`);
+    }
   } else {
     lines.push('  warn no foundationsCss configured — token/contamination checks will be skipped (fine if this system has no local CSS source)');
   }

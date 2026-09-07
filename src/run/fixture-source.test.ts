@@ -115,3 +115,48 @@ test('source-app with no foundationsCss drops the CSS import instead of referenc
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('source-app aliases a single-entry foundationsCss list exactly like the bare string', () => {
+  const dir = stageSourceApp(baseSourceConfig({ foundationsCss: ['packages/foundations/src/index.css'] }));
+  try {
+    const tsconfig = readFileSync(join(dir, 'tsconfig.json'), 'utf8');
+    assert.ok(tsconfig.includes('"/systems/acme-ui/packages/foundations/src/index.css"'));
+    const main = readFileSync(join(dir, 'src', 'main.tsx'), 'utf8');
+    assert.ok(main.includes("import '@acme/foundations/index.css';"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('source-app drops the CSS import, warning, when foundationsCss names several files', () => {
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.join(' '));
+  };
+  const cfg = baseSourceConfig({
+    foundationsCss: ['packages/tokens/css/palette.css', 'packages/tokens/css/spacing.css'],
+  });
+  let dir: string | undefined;
+  try {
+    dir = stageSourceApp(cfg);
+    // The alias resolves one path or none. Aliasing the first file would
+    // style the fixture with the palette and silently without the rest.
+    const main = readFileSync(join(dir, 'src', 'main.tsx'), 'utf8');
+    assert.ok(!main.includes('__FOUNDATIONS_CSS_ENTRY__'));
+    assert.ok(!main.includes("import '@acme/foundations"));
+
+    const tsconfig = readFileSync(join(dir, 'tsconfig.json'), 'utf8');
+    assert.doesNotThrow(() => JSON.parse(tsconfig.replace(/\/\/.*$/gm, '')));
+    assert.ok(tsconfig.includes('foundations-css-not-configured.css'));
+    assert.ok(!tsconfig.includes('palette.css'), 'must not silently alias the first file of the list');
+
+    assert.ok(
+      warnings.some((w) => w.includes('foundationsCss names 2 files')),
+      `an unstyled workspace must say why, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = realWarn;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -61,7 +61,9 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
       message: `No machine-readable catalog available for "${system}" (strategy: ${cfg.catalogStrategy}).`,
       fix: cfg.catalogFile
         ? `Expected ${cfg.catalogFile} to exist and be readable JSON.`
-        : 'Configure catalogFile, or run "npm run extract" for docgen strategies.',
+        : cfg.catalogStrategy === 'stencil'
+          ? "Point catalogFile at the docs.json emitted by Stencil's docs-json output target."
+          : 'Configure catalogFile, or run "npm run extract" for docgen strategies.',
     });
     return { id: 'catalog-quality', title: 'Catalog quality', score: null, findings };
   }
@@ -117,7 +119,16 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   // a genuinely prop-less component (field test: 63% of Mantine's exports
   // had 0 props, none of it flagged). 30% is a judgment-call threshold for
   // "enough zero-prop exports that this looks systematic, not incidental".
-  const extractionSuspect = totalExports > 0 && pctZeroProp >= 30;
+  //
+  // The inference only holds where extraction can lose props. A stencil
+  // catalog is the compiler's own docs.json, which lists every @Prop() it
+  // saw, so a zero there is the system reporting a prop-less element rather
+  // than the harness failing to read one. Telling that team the coverage is a
+  // lower bound and to "fix extraction" is exactly the wrong advice, and the
+  // zero-prop finding above already reports the same exports with a fix that
+  // fits a compiler-emitted catalog.
+  const canLoseProps = cfg.catalogStrategy !== 'stencil';
+  const extractionSuspect = canLoseProps && totalExports > 0 && pctZeroProp >= 30;
 
   findings.push({
     severity: 'info',
@@ -131,7 +142,16 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
     findings.push({
       severity: 'warn',
       message: `${zeroPropExportNames.length}/${totalExports} exports (${round1(pctZeroProp)}%) have zero documented props: ${zeroPropExportNames.slice(0, 8).join(', ')}${zeroPropExportNames.length > 8 ? ', …' : ''}.`,
-      fix: 'These are more likely docgen extraction gaps (unresolved generics, forwardRef, re-exported third-party types) than genuinely prop-less components. Spot-check a few before trusting the 0.',
+      // The docgen advice is wrong for a catalog the system's own compiler
+      // emitted: Stencil's docs.json lists every @Prop() it compiled, so a
+      // zero there is a real zero (a pure slot container like a button group),
+      // not an extractor that lost them. Pointing a Stencil team at
+      // "unresolved generics, forwardRef" would send them hunting a bug that
+      // does not exist.
+      fix:
+        cfg.catalogStrategy === 'stencil'
+          ? 'For a compiler-emitted catalog a zero is usually real: a pure slot/composition element with no @Prop(). Worth asking whether each is genuinely configuration-free, since an agent has nothing to steer it with.'
+          : 'These are more likely docgen extraction gaps (unresolved generics, forwardRef, re-exported third-party types) than genuinely prop-less components. Spot-check a few before trusting the 0.',
     });
   }
   if (extractionSuspect) {

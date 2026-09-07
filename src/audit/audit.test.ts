@@ -10,6 +10,7 @@ import type { RunManifest, RunResults, SystemCatalog, SystemConfig } from '../ty
 import { catalogPath } from '../config.ts';
 import { buildRunResults } from '../report/aggregate.ts';
 import { AUDIT_CHECKS, resolveHostedSurface, runAuditChecks } from './run.ts';
+import { loadCatalogForAudit } from './catalog-loader.ts';
 import { computeAuditScore } from './score.ts';
 import { checkExportHygiene } from './checks/export-hygiene.ts';
 import { checkVocabulary } from './checks/vocabulary.ts';
@@ -694,6 +695,98 @@ test('catalog-quality marks extraction-suspect at >=30% zero-prop exports and re
     assert.ok(
       !result.findings.some((f) => f.message.includes('% of props have a description')),
       `description coverage over non-zero-prop exports should be 100%, got: ${JSON.stringify(result.findings)}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('catalog-quality withholds extraction-suspect for a compiler-emitted stencil catalog', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-stencil-suspect-'));
+  const system = 'stencilsuspectkit';
+  try {
+    const catalogsDir = join(root, '.audit-data', 'catalogs');
+    mkdirSync(catalogsDir, { recursive: true });
+    // Same 40% zero-prop catalog that marks a docgen system extraction-suspect.
+    writeFileSync(catalogPath(system, catalogsDir), JSON.stringify(makeCatalogQualityCatalog(system, root, 4, 6), null, 2));
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_STENCILSUSPECTKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@stencilsuspectkit/components',
+      foundationsPkg: '@stencilsuspectkit/foundations',
+      catalogStrategy: 'stencil',
+      catalogFile: 'docs.json',
+      agentContext: { agentsMd: [] },
+    };
+    const result = await checkCatalogQuality(system, cfg, { catalogsDir, tokensDir: join(root, 'tokens') });
+
+    // docs.json lists every @Prop() the compiler saw, so a zero is the system
+    // reporting a prop-less element, not extraction losing one. Calling the
+    // coverage a lower bound and saying "fix extraction" would be wrong twice.
+    assert.ok(
+      !result.findings.some((f) => f.message.startsWith('extraction-suspect')),
+      `a compiler-emitted catalog must not be called extraction-suspect, got: ${JSON.stringify(result.findings)}`,
+    );
+    // The exports are still reported, with advice that fits the strategy.
+    const zeroFinding = result.findings.find((f) => f.message.includes('zero documented props'));
+    assert.ok(zeroFinding, `expected the zero-prop finding to still fire, got: ${JSON.stringify(result.findings)}`);
+    assert.ok(
+      !/fix extraction/i.test(zeroFinding!.fix ?? ''),
+      `stencil advice must not send the team after an extraction bug, got: ${zeroFinding!.fix}`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('loadCatalogForAudit reads a snapshot-less stencil system live instead of calling it docgen-able', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'open-design-system-bench-audit-stencil-live-'));
+  const system = 'stencillivekit';
+  try {
+    writeFile(
+      join(root, 'src/components/ds-button/ds-button.tsx'),
+      "@Component({ tag: 'ds-button' })\nexport class DsButton {}\n",
+    );
+    writeFile(
+      join(root, 'docs.json'),
+      JSON.stringify({
+        timestamp: '2026-09-07',
+        components: [
+          {
+            tag: 'ds-button',
+            filePath: 'src/components/ds-button/ds-button.tsx',
+            docs: 'A button.',
+            docsTags: [],
+            props: [
+              { name: 'controlType', attr: 'control-type', type: 'string', docs: 'Icon or text.', default: "'icon'", required: false, docsTags: [] },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'OPEN_DESIGN_SYSTEM_BENCH_STENCILLIVEKIT_DIR',
+      componentsSrc: 'src',
+      componentsPkg: '@stencillivekit/components',
+      foundationsPkg: '@stencillivekit/foundations',
+      catalogStrategy: 'stencil',
+      catalogFile: 'docs.json',
+      agentContext: { agentsMd: [] },
+    };
+    // No snapshot on disk: the point is that the strategy's own file is read
+    // rather than falling through to the docgen preconditions, whose "run
+    // extract" advice can never produce a catalog for a Stencil system.
+    const load = await loadCatalogForAudit(system, cfg, join(root, '.audit-data', 'catalogs'));
+
+    assert.equal(load.source, 'stencil-live');
+    assert.ok(load.catalog, 'expected a catalog read live from docs.json');
+    assert.deepEqual(
+      load.catalog!.components.map((c) => c.exports.map((e) => e.displayName)).flat(),
+      ['ds-button'],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

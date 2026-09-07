@@ -6,12 +6,14 @@
 //     extract`, or a committed examples/*/data/catalogs/*.json snapshot
 //     (resolveDataDirs handles which). This is the common case and needs no
 //     parsing beyond JSON.parse.
-//  2. catalog-json strategy with no snapshot: read the system's own
+//  2. A file-backed strategy with no snapshot: read the system's own
 //     configured catalogFile directly via the same static, local parser
-//     `extract` uses (extractCatalogJsonCatalog). allowStale:true because
-//     that function's staleness guard is a write-time safety check for
-//     `extract` — a read-only audit should report staleness as a finding,
-//     never throw.
+//     `extract` uses. Both 'catalog-json' and 'stencil' qualify — each is a
+//     JSON parse of a file the repo already ships, cheap enough to do on
+//     every audit — so a snapshot-less system of either kind is measured
+//     rather than guessed at. allowStale:true because those functions'
+//     staleness guards are write-time safety checks for `extract` — a
+//     read-only audit should report staleness as a finding, never throw.
 //  3. docgen strategy with no snapshot: we deliberately do NOT invoke
 //     react-docgen-typescript here (that's `extract`'s job, and running full
 //     docgen for every configured system on every `audit` invocation would
@@ -28,6 +30,7 @@ import { join } from 'node:path';
 import { catalogPath } from '../config.ts';
 import type { SystemCatalog, SystemConfig, SystemId } from '../types.ts';
 import { extractCatalogJsonCatalog } from '../extract/catalog-json.ts';
+import { extractStencilCatalog } from '../extract/catalog-stencil.ts';
 import { findTsconfigUpward } from '../extract/normalize.ts';
 import { walkFiles } from './fs-walk.ts';
 
@@ -38,7 +41,32 @@ import { walkFiles } from './fs-walk.ts';
  * extractor never follows), NOT evidence about the system. Checks must treat
  * it as unmeasured-with-a-loud-warning, never score it as a bad catalog.
  */
-export type CatalogSource = 'pre-extracted' | 'empty-extract' | 'catalog-json-live' | 'none-catalog-json' | 'none-docgen';
+export type CatalogSource =
+  | 'pre-extracted'
+  | 'empty-extract'
+  | 'catalog-json-live'
+  | 'stencil-live'
+  | 'none-catalog-json'
+  | 'none-stencil'
+  | 'none-docgen';
+
+/**
+ * The strategies whose catalog is a file the system already ships, and which
+ * the audit can therefore read live. Keyed so adding a third file-backed
+ * strategy is one entry rather than another branch in loadCatalogForAudit and
+ * another ternary in every check that names the source.
+ */
+const FILE_BACKED_STRATEGIES: Record<
+  'catalog-json' | 'stencil',
+  {
+    read: (system: SystemId, cfg: SystemConfig, opts?: { allowStale?: boolean }) => Promise<SystemCatalog>;
+    live: CatalogSource;
+    none: CatalogSource;
+  }
+> = {
+  'catalog-json': { read: extractCatalogJsonCatalog, live: 'catalog-json-live', none: 'none-catalog-json' },
+  stencil: { read: extractStencilCatalog, live: 'stencil-live', none: 'none-stencil' },
+};
 
 export interface DocgenPreconditions {
   tsconfigExists: boolean;
@@ -76,19 +104,23 @@ export async function loadCatalogForAudit(
     }
   }
 
-  if (cfg.catalogStrategy === 'catalog-json') {
+  if (cfg.catalogStrategy === 'catalog-json' || cfg.catalogStrategy === 'stencil') {
+    const { read, live, none } = FILE_BACKED_STRATEGIES[cfg.catalogStrategy];
     if (cfg.catalogFile && existsSync(join(cfg.root, cfg.catalogFile))) {
       try {
-        const catalog = await extractCatalogJsonCatalog(system, cfg, { allowStale: true });
-        return { catalog, source: 'catalog-json-live' };
+        const catalog = await read(system, cfg, { allowStale: true });
+        return { catalog, source: live };
       } catch {
-        return { catalog: null, source: 'none-catalog-json' };
+        return { catalog: null, source: none };
       }
     }
-    return { catalog: null, source: 'none-catalog-json' };
+    return { catalog: null, source: none };
   }
 
-  // docgen strategy, no snapshot available.
+  // docgen strategy with no snapshot. Nothing else may reach here: reporting
+  // a system as "docgen-able, run extract" on the strength of a tsconfig and
+  // a .tsx count is advice that can never work for a catalog the system's own
+  // compiler emits.
   const srcDir = join(cfg.root, cfg.componentsSrc);
   return {
     catalog: null,

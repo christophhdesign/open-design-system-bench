@@ -372,6 +372,57 @@ test('runInit round-trips a catalog-json strategy with catalogFile', async () =>
   }
 });
 
+test('runInit round-trips a stencil strategy with catalogFile', async () => {
+  const repo = tmpCwd('odsys-source-repo-stencil-');
+  const cwd = tmpCwd('odsys-init-stencil-');
+  try {
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    writeFileSync(join(repo, 'docs.json'), '{"components":[]}\n');
+    const result = await runInit({
+      nonInteractive: true,
+      cwd,
+      answers: {
+        systemId: 'acme',
+        consume: 'source',
+        root: repo,
+        componentsSrc: 'src',
+        catalogStrategy: 'stencil',
+        catalogFile: 'docs.json',
+      },
+    });
+    const written = JSON.parse(readFileSync(result.configPath, 'utf8')) as SystemsConfigFileShape;
+    // 'stencil' must survive the round trip rather than degrading to the
+    // 'docgen' placeholder, which is what an unrecognized strategy becomes.
+    assert.equal(written.systems.acme.catalogStrategy, 'stencil');
+    assert.equal(written.systems.acme.catalogFile, 'docs.json');
+    assert.match(result.summary, /ok\s+catalogFile exists/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('runInit doctor lines name docs.json when a stencil system has no catalogFile', async () => {
+  const repo = tmpCwd('odsys-source-repo-stencil-nofile-');
+  const cwd = tmpCwd('odsys-init-stencil-nofile-');
+  try {
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    const result = await runInit({
+      nonInteractive: true,
+      cwd,
+      answers: { systemId: 'acme', consume: 'source', root: repo, componentsSrc: 'src', catalogStrategy: 'stencil' },
+    });
+    // The point of the warning is that it says what to go and generate. A
+    // generic "no catalogFile is set" leaves a Stencil team guessing at a
+    // file the compiler already knows how to emit.
+    assert.match(result.summary, /docs\.json/);
+    assert.match(result.summary, /componentsSrc exists/);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Config file is valid, pretty-printed JSON ending in a newline
 // ---------------------------------------------------------------------------
