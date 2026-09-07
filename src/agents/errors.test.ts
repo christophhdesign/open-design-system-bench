@@ -16,6 +16,9 @@ test('looksLikeUsageLimit matches typical claude CLI usage-limit phrasings', () 
     true,
   );
   assert.equal(looksLikeUsageLimit('insufficient credits to complete this request'), true);
+  // Real message that slipped past the patterns (2026-09-03 field test, 25 cells lost):
+  assert.equal(looksLikeUsageLimit("You've hit your session limit · resets 2am (Europe/Berlin)"), true);
+  assert.equal(looksLikeUsageLimit("You've hit your weekly limit · resets Sep 8 at 9am"), true);
 });
 
 test('looksLikeUsageLimit does not match ordinary errors', () => {

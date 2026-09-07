@@ -91,6 +91,14 @@ source and is not part of the shipped repo.
   every API gate while being the worst outcome.
 - **Tier thresholds** in `src/audit/score.ts` (AI-native ≥70 / Invested ≥40) are documented
   defaults awaiting recalibration from the reference-run distribution.
+- **A check that could not measure returns `null`, never a constant.** `score.ts` redistributes a
+  null check's weight proportionally, so withholding is cheap and honest; a fallback constant is
+  not, because it prints as a measured grade. Export hygiene used to fall through to
+  `hasTypes ? 60 : 30` whenever it found no component dirs, and a Stencil system (whose components
+  are decorator-declared, with no per-dir index file) scored a confident 60 on a reachability
+  question that had never been asked. Two rules follow: a layout where the question does not apply
+  is reported `info` + null, a layout the harness simply could not read is `warn` + null, and
+  neither is a grade.
 - **Written reports split a fixed data layer from a free interpretation layer.** `report --stats`
   generates every number and every computed section; `report --validate` re-renders them and
   requires a byte match, and rejects any figure in agent prose that does not trace to computed data
