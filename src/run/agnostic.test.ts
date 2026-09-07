@@ -232,3 +232,39 @@ test('injectContext expands an extraDocs glob and preserves the tree', async () 
     rmSync(dest, { recursive: true, force: true });
   }
 });
+
+test('injectContext warns when an extraDocs glob matches nothing', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-docs-empty-'));
+  const dest = mkdtempSync(join(tmpdir(), 'odsys-docs-empty-dest-'));
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.join(' '));
+  };
+  try {
+    writeF(join(root, 'AGENTS.md'), '# agents\n');
+    writeF(join(root, 'pkg/src/card/card.tsx'), 'export const x = 1;\n');
+
+    const cfg: SystemConfig = {
+      root,
+      rootEnv: 'ODSYS_DOCS_EMPTY_DIR',
+      componentsSrc: 'pkg/src',
+      componentsPkg: '@fake/ui',
+      foundationsPkg: '@fake/tokens',
+      catalogStrategy: 'docgen',
+      agentContext: { agentsMd: ['AGENTS.md'], extraDocs: ['pkg/src/**/readme.md'] },
+    };
+    injectContextForTest(cfg, 'skill', dest);
+
+    // A pattern that matches nothing is the same shortfall as a missing
+    // literal path, which throws — it must not pass in silence.
+    assert.ok(
+      warnings.some((w) => w.includes('pkg/src/**/readme.md')),
+      'an unmatched extraDocs pattern must be named in a warning',
+    );
+  } finally {
+    console.warn = realWarn;
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dest, { recursive: true, force: true });
+  }
+});

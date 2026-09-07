@@ -80,7 +80,9 @@ Globs preserve structure because flattening cannot work for them: a hundred file
 relative path only resolves if the tree is intact. Reach for a glob when the documentation worth
 giving the agent is scattered through the source tree rather than gathered in a docs directory -
 per-component API tables are the common case, and naming the parent directory instead would copy
-the entire implementation alongside them.
+the entire implementation alongside them. A literal path that does not exist fails the provision; a
+glob that matches nothing cannot, so it is warned about by name instead. Watch for that warning,
+because the run continues either way and the agent is the one left short.
 
 Note what is **not** substituted: where the components sit *inside* the checkout. `source-app`
 hardcodes a `packages/components/src` layout in its tsconfig paths and Vite aliases. A system that

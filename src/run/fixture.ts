@@ -216,7 +216,7 @@ function injectAgentsMd(systemCfg: SystemConfig, destDir: string): void {
  * A configured path can reasonably be either shape, and the difference is one
  * directory level, which is the whole ballgame: a skill nested one level too
  * deep is not found, and the run silently measures an unskilled agent at the
- * context level whose entire purpose is measuring a skilled one. Admiral
+ * context level whose entire purpose is measuring a skilled one. One system
  * declares `.agents/skills`, a directory OF eighteen skill bundles, and every
  * one of them landed at `.claude/skills/skills/<name>/SKILL.md` and was
  * invisible.
@@ -341,19 +341,30 @@ function globFiles(root: string, pattern: string): string[] {
  *     relative path only resolves if the tree is kept intact.
  *
  * Globs exist because the interesting documentation is often scattered
- * through the source tree rather than gathered in a docs directory. Admiral's
- * per-component API tables live at src/components/<group>/<tag>/readme.md —
- * 487 KB across 110 files, inside a 26 MB tree that is mostly image assets.
- * Naming the directory would copy all 26 MB and hand the agent the .tsx
- * implementation an npm consumer never sees; naming 110 literal paths is not
- * a config anyone maintains.
+ * through the source tree rather than gathered in a docs directory. On one
+ * production system the per-component API tables live at
+ * src/components/<group>/<tag>/readme.md — 487 KB across 110 files, inside a
+ * 26 MB tree that is mostly image assets. Naming the directory would copy all
+ * 26 MB and hand the agent the .tsx implementation an npm consumer never sees;
+ * naming 110 literal paths is not a config anyone maintains.
+ *
+ * A pattern matching nothing is warned about rather than passed over: it is
+ * the same silent shortfall a missing literal path throws on, and the whole
+ * point of a guided context level is that the agent got what the config
+ * promised it.
  */
 function injectExtraDocs(systemCfg: SystemConfig, destDir: string): void {
   const docsDir = join(destDir, 'docs');
   mkdirSync(docsDir, { recursive: true });
   for (const docPath of systemCfg.agentContext.extraDocs ?? []) {
     if (docPath.includes('*')) {
-      for (const rel of globFiles(systemCfg.root, docPath)) {
+      const matches = globFiles(systemCfg.root, docPath);
+      if (matches.length === 0) {
+        console.warn(
+          `[fixture] extraDocs pattern '${docPath}' matched no files under ${systemCfg.root} — nothing injected for it`,
+        );
+      }
+      for (const rel of matches) {
         const dest = join(docsDir, rel);
         mkdirSync(dirname(dest), { recursive: true });
         cpSync(join(systemCfg.root, rel), dest, { recursive: true });
