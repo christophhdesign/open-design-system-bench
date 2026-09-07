@@ -162,6 +162,16 @@ and measuring your own fixture:
 
 **Point the aliases at the real layout.** Both `vite.config.ts` and `tsconfig.json` carry the path,
 and they must agree. Vite resolves what runs; tsc resolves what the `compile` dimension grades.
+Only tsc is graded, so a broken Vite alias is quiet - it costs you the dev server and the build,
+not the score, and you will not find out from a run.
+
+Two things about the Vite side specifically, both of which the generic templates already handle.
+Build a pattern with `new RegExp` from the substituted package name rather than writing a regex
+literal: a placeholder is replaced as literal text, and a scoped name's slash closes the literal
+early, leaving the file unparseable. And list the subpath entry *before* the barrel entry, because
+Vite takes the first match and a plain string `find` matches the whole prefix - `'@acme/ui'` also
+matches `'@acme/ui/button'`, so a barrel entry listed first sends every deep import to
+`<src>/index.ts/button`.
 
 **Match the React major.** Consuming from source means the fixture and the system share one React
 instance. A version mismatch surfaces as "two different types with this name exist, but they are

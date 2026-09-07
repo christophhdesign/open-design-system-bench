@@ -19,21 +19,33 @@ import react from '@vitejs/plugin-react';
 // per-component import.
 const SYSTEM_ROOT = '__SYSTEM_ROOT__';
 const COMPONENTS_SRC = '__COMPONENTS_SRC__';
+const COMPONENTS_PKG = '__COMPONENTS_PKG__';
+
+// Placeholders are substituted as literal text, and a package name is nearly
+// always scoped, so the slash in '@acme/ui' would close a regex literal early
+// and leave this file unparseable. The patterns are therefore built from an
+// escaped string rather than written as literals.
+const pkgPattern = COMPONENTS_PKG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
+    // Ordered most specific first. Vite takes the FIRST matching entry, and a
+    // string `find` matches the whole prefix — '@acme/ui' also matches
+    // '@acme/ui/button' — so a bare-string barrel entry listed first would
+    // swallow every deep import and rewrite it to '<src>/index.ts/button'.
+    // Both entries are anchored regexes to keep the two cases disjoint.
     alias: [
+      // Subpath imports into the system's own source tree.
+      {
+        find: new RegExp(`^${pkgPattern}/(.+)$`),
+        replacement: `${SYSTEM_ROOT}/${COMPONENTS_SRC}/$1`,
+      },
       // Root barrel: whatever the system's entry point exports (the element
       // registry, a defineCustomElements loader, runtime helpers).
       {
-        find: '__COMPONENTS_PKG__',
+        find: new RegExp(`^${pkgPattern}$`),
         replacement: `${SYSTEM_ROOT}/${COMPONENTS_SRC}/index.ts`,
-      },
-      // Subpath imports into the system's own source tree.
-      {
-        find: /^__COMPONENTS_PKG__\/(.*)$/,
-        replacement: `${SYSTEM_ROOT}/${COMPONENTS_SRC}/$1`,
       },
       // The design tokens, resolved the same way source-app resolves them: a
       // bare `<foundationsPkg>/index.css` specifier aliased at whatever single

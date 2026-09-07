@@ -19,6 +19,52 @@ import { paths } from '../config.ts';
 import type { SystemConfig } from '../types.ts';
 
 const SOURCE_APP_DIR = join(paths.fixturesDir, 'source-app');
+const CUSTOM_ELEMENTS_APP_DIR = join(paths.fixturesDir, 'custom-elements-app');
+
+/**
+ * The alias entries a substituted vite.config.ts actually produces.
+ *
+ * Evaluated rather than pattern-matched, because the two bugs this guards
+ * against are both invisible to a text assertion: a scoped componentsPkg
+ * substituted into a regex LITERAL closes it early and makes the whole file
+ * unparseable, and an alias list in the wrong order resolves the wrong entry
+ * while looking perfectly correct. The config's own imports are stubbed so
+ * this stays offline and needs no fixture node_modules.
+ */
+function evalViteAliases(dir: string): { find: string | RegExp; replacement: string }[] {
+  const body = readFileSync(join(dir, 'vite.config.ts'), 'utf8')
+    .replace(/^import .*$/gm, '')
+    .replace('export default ', 'return ');
+  const stub = () => ({});
+  const config = new Function('defineConfig', 'react', 'tailwindcss', body)(
+    (c: unknown) => c,
+    stub,
+    stub,
+  ) as { resolve: { alias: { find: string | RegExp; replacement: string }[] } };
+  return config.resolve.alias;
+}
+
+/**
+ * Vite's own alias matching, from @rollup/plugin-alias. Reproduced here
+ * because the prefix rule on the last line is the whole point: a string
+ * `find` of '@acme/components' also matches '@acme/components/button', so
+ * entry order decides which one a deep import gets.
+ */
+function matchesAlias(pattern: string | RegExp, importee: string): boolean {
+  if (pattern instanceof RegExp) return pattern.test(importee);
+  if (importee.length < pattern.length) return false;
+  if (importee === pattern) return true;
+  return importee.startsWith(`${pattern}/`);
+}
+
+/** First matching alias applied to `importee`, or undefined when none matches. */
+function resolveAlias(dir: string, importee: string): string | undefined {
+  for (const { find, replacement } of evalViteAliases(dir)) {
+    if (!matchesAlias(find, importee)) continue;
+    return find instanceof RegExp ? importee.replace(find, replacement) : importee.replace(find, replacement);
+  }
+  return undefined;
+}
 
 function baseSourceConfig(overrides: Partial<SystemConfig> = {}): SystemConfig {
   return {
@@ -158,5 +204,83 @@ test('source-app drops the CSS import, warning, when foundationsCss names severa
   } finally {
     console.warn = realWarn;
     if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Vite alias resolution. The tsconfig side of the same aliases is plain JSON
+// and has always been correct, which is why this went unnoticed: `compile`
+// grades through tsc, so a broken vite.config.ts costs the fixture its dev
+// server and build, not its score.
+// ---------------------------------------------------------------------------
+
+test('source-app vite config parses after substitution, with a scoped componentsPkg', () => {
+  // Guards the obvious repair of the bug below, which is worse than the bug:
+  // writing the pattern as the literal `/^__COMPONENTS_PKG__\/(.*)$/` puts a
+  // scoped package's slash inside a regex literal, closing it early, and node
+  // rejects the whole file with "SyntaxError: Invalid regular expression
+  // flags". Nearly every real componentsPkg is scoped, so that would be the
+  // normal case rather than an edge one.
+  const dir = stageSourceApp(baseSourceConfig());
+  try {
+    assert.doesNotThrow(() => evalViteAliases(dir));
+    const vite = readFileSync(join(dir, 'vite.config.ts'), 'utf8');
+    assert.ok(!vite.includes('__COMPONENTS_PKG__'), 'placeholder must be fully substituted');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('source-app aliases a deep import at the component, not through the barrel', () => {
+  // The bug, on two counts. The subpath pattern was left as scrubbed
+  // placeholder prose, `/^@the design system\/components\/(.*)$/`, so it
+  // matched no package any system could declare. And it would never have been
+  // reached anyway: the barrel entry came first as a bare string, which
+  // matches the whole prefix, so '@acme/components/button' resolved to
+  // '<src>/index.ts/button' — a path that cannot exist.
+  const dir = stageSourceApp(baseSourceConfig());
+  try {
+    assert.equal(
+      resolveAlias(dir, '@acme/components/button'),
+      '/systems/acme-ui/packages/components/src/button',
+    );
+    assert.equal(
+      resolveAlias(dir, '@acme/components'),
+      '/systems/acme-ui/packages/components/src/index.ts',
+    );
+    // A nested subpath keeps its whole tail.
+    assert.equal(
+      resolveAlias(dir, '@acme/components/forms/text-field'),
+      '/systems/acme-ui/packages/components/src/forms/text-field',
+    );
+    // A package that merely starts with the same characters is not ours.
+    assert.equal(resolveAlias(dir, '@acme/components-legacy'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('source-app alias patterns survive a componentsPkg containing regex metacharacters', () => {
+  const cfg = baseSourceConfig({ componentsPkg: '@acme/ui.core+web', componentsSrc: 'src' });
+  const dir = stageSourceApp(cfg);
+  try {
+    assert.equal(resolveAlias(dir, '@acme/ui.core+web/button'), '/systems/acme-ui/src/button');
+    // Unescaped, '.' and '+' would let a different package match.
+    assert.equal(resolveAlias(dir, '@acme/uixcorexweb/button'), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('custom-elements-app resolves the same two alias shapes', () => {
+  const cfg = baseSourceConfig({ componentModel: 'custom-elements', componentsSrc: 'src' });
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-ce-app-'));
+  try {
+    copyTemplate(CUSTOM_ELEMENTS_APP_DIR, dir);
+    substitutePlaceholders(dir, cfg);
+    assert.equal(resolveAlias(dir, '@acme/components'), '/systems/acme-ui/src/index.ts');
+    assert.equal(resolveAlias(dir, '@acme/components/loader'), '/systems/acme-ui/src/loader');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
