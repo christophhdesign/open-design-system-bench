@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      // One @types/react for the whole program. The design system is consumed
+      // from source and resolves its own peer deps out of ITS node_modules (a
+      // different physical copy), which otherwise makes structurally identical
+      // branded types resolve as nominally distinct and produces "Two
+      // different types with this name exist, but they are unrelated."
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/client": ["./node_modules/@types/react-dom/client"]
+      // Deliberately NO path alias to the design system's source: see
+      // src/system-module.d.ts. Vite still aliases it for the runtime bundle.
+    }
+  },
+  "include": ["src"]
+}
