@@ -100,6 +100,7 @@ there (or pass `--systems a,b`) to benchmark several at once.
 | `contamination` | no | Cross-system sentinel props + typography casing — only meaningful with 2+ systems configured |
 | `fixtureTemplate` | no | Path to this system's fixture template app. Source mode falls back to `fixtures/<systemId>-app`, then the generic `fixtures/source-app`; `npm` mode uses `fixtures/npm-app` |
 | `consume` | no | `"source"` (default) or `"npm"` — see [npm-consume mode](#npm-consume-mode) below |
+| `componentModel` | no | `"react"` (default) or `"custom-elements"` for a system that ships web components (Stencil, Lit, a custom-element registry) — see [web-component systems](#web-component-systems) below |
 | `packageSpec` | `npm` only | npm install spec, e.g. `"@acme/ui"` or `"@acme/ui@^2.0.0"`; defaults to `componentsPkg` |
 | `cssEntry` | no | Import specifier for the system's stylesheet, e.g. `"@acme/ui/styles.css"`; optional, `npm` mode only |
 | `fixturePins` | no | Extra npm specs installed alongside `packageSpec`, for peer-dependency conflicts (a library still on React 18 needs `["react@^18.3.1", …]` against the template's React 19) |
@@ -148,6 +149,35 @@ current directory). `catalogStrategy` still has to be one of `"docgen"`, `"catal
 `"stencil"` (there's no `"none"` in the schema); if you don't have an extraction strategy figured
 out yet, `init` persists `"docgen"` as a schema-valid placeholder and warns loudly that it needs
 editing before `extract` will do anything useful.
+
+## Web-component systems
+
+If your system ships web components rather than React components — Stencil, Lit, a hand-rolled
+custom-element registry — set `"componentModel": "custom-elements"`. Consumers of such a system
+register the bundle once and then write `<ds-button>` as a tag, with no per-component import
+anywhere, and the harness has to be told that: usage detection is otherwise anchored on an import
+from `componentsPkg`, so a perfect answer would score zero on `apiFidelity` with "no design-system
+components used".
+
+The flag switches the fixture to the generic `fixtures/custom-elements-app`, makes `apiFidelity`
+resolve dashed JSX tags against the catalog, and has provisioning generate a
+`src/system-elements.d.ts` declaring every element and the attributes it accepts, so tags typecheck
+and an invented attribute *value* fails the `compile` gate. Because those declarations come from the
+extracted catalog, run `extract` before `run`.
+
+It is independent of `catalogStrategy`: a Lit library read through `"catalog-json"` is just as
+custom-element-shaped as a Stencil one read through `"stencil"`.
+
+One thing to configure by hand. The `a11yStatic` grader identifies unlabelled controls by name and
+its defaults are conventional React names, which no dashed tag matches — so list your own under
+`a11y` or that dimension will score near 100 regardless of what the agent writes:
+
+```json
+"componentModel": "custom-elements",
+"a11y": { "controls": ["ds-input", "ds-select", "ds-toggle"], "iconOnly": ["ds-icon-button"] }
+```
+
+See [fixtures/README.md](fixtures/README.md) for the fixture's design constraints.
 
 ## The static audit and the AI-Readiness Score
 

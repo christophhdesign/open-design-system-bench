@@ -35,7 +35,7 @@ import {
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { PKG_ROOT, paths } from '../config.ts';
-import type { ContextLevel, SystemConfig, SystemId } from '../types.ts';
+import type { ContextLevel, SystemCatalog, SystemConfig, SystemId } from '../types.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -72,7 +72,15 @@ function aliasableFoundationsCss(cfg: SystemConfig): string | undefined {
   if (!Array.isArray(raw)) return raw;
   return raw.length === 1 ? raw[0] : undefined;
 }
-const SUBSTITUTED_FILES = ['vite.config.ts', 'tsconfig.json', 'index.html', 'src/App.tsx', 'src/main.tsx'];
+const SUBSTITUTED_FILES = [
+  'vite.config.ts',
+  'tsconfig.json',
+  'index.html',
+  'src/App.tsx',
+  'src/main.tsx',
+  // custom-elements-app only: the ambient declaration for componentsPkg.
+  'src/system-module.d.ts',
+];
 const CSS_ENTRY_PLACEHOLDER = '__CSS_ENTRY__';
 const FOUNDATIONS_CSS_ENTRY_PLACEHOLDER = '__FOUNDATIONS_CSS_ENTRY__';
 
@@ -113,15 +121,22 @@ const npmInstallArgs = (extra: string[] = []) => [
  *   1. SystemConfig.fixtureTemplate, when set
  *   2. fixtures/<systemId>-app, when a team has hand-rolled one
  *   3. fixtures/source-app, the generic template
+ *   3. fixtures/custom-elements-app when componentModel is 'custom-elements',
+ *      else fixtures/source-app
  * Step 3 is what makes source mode work out of the box: the generic template
  * carries __SYSTEM_ROOT__ / __COMPONENTS_PKG__ / __FOUNDATIONS_PKG__
  * placeholders that provisionWorkspace fills in from the system's own config.
+ * A web-component system cannot use the React template: its exports are
+ * element classes rather than components, and consumers write tags instead of
+ * importing anything per component.
  */
 export function templateDir(system: SystemId, cfg: SystemConfig): string {
   if (cfg.consume === 'npm') return preparedNpmDir(system);
   if (cfg.fixtureTemplate) return resolve(PKG_ROOT, cfg.fixtureTemplate);
   const perSystem = join(paths.fixturesDir, `${system}-app`);
-  return existsSync(perSystem) ? perSystem : join(paths.fixturesDir, 'source-app');
+  if (existsSync(perSystem)) return perSystem;
+  if (cfg.componentModel === 'custom-elements') return join(paths.fixturesDir, 'custom-elements-app');
+  return join(paths.fixturesDir, 'source-app');
 }
 
 /** Source dir for the generic npm-consume template: SystemConfig.fixtureTemplate if set, else the built-in fixtures/npm-app. */
@@ -215,11 +230,180 @@ export async function prepareTemplate(system: SystemId, cfg: SystemConfig): Prom
   await execFileAsync('npm', npmInstallArgs(), { cwd: dir, maxBuffer: 50 * 1024 * 1024 });
 }
 
+// ---------------------------------------------------------------------------
+// Custom-element JSX types
+// ---------------------------------------------------------------------------
+//
+// TypeScript rejects an undeclared dashed tag ("Property 'ds-button' does not
+// exist on type 'JSX.IntrinsicElements'"), so a web-component fixture needs a
+// declaration for every element the system ships. It is generated from the
+// extracted catalog rather than shipped in the template, because the element
+// names ARE the system's API and no static template can know them.
+//
+// This is not a ground-truth leak. A source-consuming React fixture already
+// aliases the whole component tree into the workspace, where the agent can
+// read every export and prop; this file gives a web-component system's agent
+// the same access and no more. Task prompts still never name a component.
+//
+// Prop TYPES are emitted from the catalog wherever they can be trusted
+// verbatim, and fall back to `unknown` where they cannot. An earlier version
+// typed every prop `unknown` on the theory that values were apiFidelity's job.
+// That was wrong, and the first real run proved it: a model wrote
+// variant="danger" on an element whose variant is
+// "destructive" | "muted" | "negative" | "primary" | "secondary" | "tertiary",
+// and scored 100 on both apiFidelity and compile. apiFidelity checks prop
+// NAMES, never values, so with `unknown` here nothing in the harness checked
+// them at all — an invented value was strictly invisible.
+//
+// "Trusted verbatim" is deliberately narrow (see isSelfContainedType): string
+// and numeric literal unions plus the primitive keywords, i.e. types that
+// depend on nothing outside this file. A type naming another symbol
+// (`ButtonConfig`, `EventEmitter<T>`, an inline object or function shape)
+// would not resolve here, so it degrades to `unknown`. Measured on a real
+// 110-element system, the large majority of its 317 props emit a real type and
+// the rest degrade.
+
+/** Doc comment lines for one element, or '' when it has no description. */
+function elementDocComment(description: string | undefined, indent: string): string {
+  const text = (description ?? '').trim();
+  if (!text) return '';
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return '';
+  return `${indent}/**\n${lines.map((l) => `${indent} * ${l}`).join('\n')}\n${indent} */\n`;
+}
+
+// One union member that resolves without reference to anything else: a string
+// or numeric literal, or a primitive/top/bottom keyword.
+const SELF_CONTAINED_ATOM =
+  '(?:"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|-?\\d+(?:\\.\\d+)?' +
+  '|string|number|boolean|bigint|symbol|null|undefined|true|false|any|unknown|never|void)';
+const SELF_CONTAINED_TYPE_RE = new RegExp(`^\\s*${SELF_CONTAINED_ATOM}(?:\\s*\\|\\s*${SELF_CONTAINED_ATOM})*\\s*$`);
+
+/**
+ * True when a catalog type string can be pasted into the generated .d.ts as
+ * written. Conservative on purpose: a type that references any other symbol is
+ * rejected even though it might resolve, because an unresolvable name here
+ * silently makes the prop accept anything (the fixture compiles with
+ * skipLibCheck, so tsc reports nothing for the .d.ts itself) — which is the
+ * exact blindness emitting real types is meant to remove.
+ */
+export function isSelfContainedType(type: string | undefined): boolean {
+  if (!type) return false;
+  const trimmed = type.trim();
+  if (trimmed === '' || trimmed.toLowerCase() === 'unknown') return false;
+  return SELF_CONTAINED_TYPE_RE.test(trimmed);
+}
+
+// Attributes every element accepts on top of its own props. `class` and `for`
+// are the HTML spellings of className/htmlFor: React 19 passes both straight
+// through on a custom element (unlike a native one, where it tells you to use
+// className), and a web-component system's docs are HTML, so its examples use
+// them. This list must stay in step with the custom-element branch of
+// isAttrAllowed in src/grade/mechanical/api-fidelity.ts, or the grader and the
+// compiler disagree about the same attribute.
+const UNIVERSAL_ELEMENT_ATTRS: Record<string, string> = { class: 'string', for: 'string' };
+
+/**
+ * A .d.ts declaring every catalog element as a JSX intrinsic. Elements are
+ * identified by a dash in the name, which is the custom-element spec's own
+ * rule and therefore excludes the PascalCase class-name spellings the catalog
+ * also carries for framework wrappers.
+ */
+export function renderCustomElementTypes(catalog: SystemCatalog): string {
+  const described = new Map<string, string>();
+  // Documented props carry the types; allPropsByExport carries the full
+  // gradeable name list, including attribute aliases that have no catalog
+  // entry of their own. An alias inherits the type of the prop it spells
+  // differently — `control-type` accepts exactly what `controlType` accepts.
+  const typeByTagProp = new Map<string, string>();
+  for (const comp of catalog.components) {
+    for (const exp of comp.exports) {
+      described.set(exp.displayName, exp.description);
+      for (const prop of exp.props) {
+        if (!isSelfContainedType(prop.type)) continue;
+        typeByTagProp.set(`${exp.displayName}\u0000${prop.name}`, prop.type.trim());
+        const camel = prop.name.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
+        const kebab = prop.name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+        for (const alias of [camel, kebab]) {
+          const key = `${exp.displayName}\u0000${alias}`;
+          if (!typeByTagProp.has(key)) typeByTagProp.set(key, prop.type.trim());
+        }
+      }
+    }
+  }
+
+  const tags = catalog.allExports.filter((name) => name.includes('-')).sort();
+
+  const entries = tags.map((tag) => {
+    const doc = elementDocComment(described.get(tag), '      ');
+    // Deduped, because a duplicate key in a type literal is a redeclaration,
+    // and the catalog's own prop list plus the universal attributes above can
+    // legitimately name the same attribute twice.
+    const props = new Map<string, string>(Object.entries(UNIVERSAL_ELEMENT_ATTRS));
+    for (const prop of catalog.allPropsByExport[tag] ?? []) {
+      props.set(prop, typeByTagProp.get(`${tag}\u0000${prop}`) ?? 'unknown');
+    }
+    const propLines = [...props]
+      .map(([prop, type]) => `        ${JSON.stringify(prop)}?: ${type};`)
+      .join('\n');
+    return `${doc}      ${JSON.stringify(tag)}: ElementAttributes<{\n${propLines}\n      }>;`;
+  });
+
+  return [
+    '// GENERATED at workspace provision time from the extracted catalog.',
+    '// Every element this design system ships, with the attributes it accepts.',
+    '// Do not edit: it is the system\'s API surface, not part of the task.',
+    "import type { DetailedHTMLProps, HTMLAttributes } from 'react';",
+    '',
+    '// Everything React allows on any host element — id, style, className,',
+    '// aria-*, data-*, event handlers, and, via DetailedHTMLProps, `key` and',
+    '// `ref` — with the keys the element declares itself removed first.',
+    '//',
+    '// The Omit is load-bearing twice over. An intersection NARROWS a shared',
+    '// key rather than replacing it, so an element whose own `hidden` is a',
+    '// string union would meet React\'s boolean `hidden` and collapse to',
+    '// `never`, failing compile on every value including the documented ones.',
+    '// And HTMLAttributes alone carries neither `key` nor `ref` (native',
+    '// elements get those from DetailedHTMLProps), so without this an ordinary',
+    '// `{items.map((i) => <ds-row key={i.id} />)}` would not compile.',
+    'type ElementAttributes<P> = Omit<DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement>, keyof P> & P;',
+    '',
+    "declare module 'react' {",
+    '  namespace JSX {',
+    '    interface IntrinsicElements {',
+    entries.join('\n'),
+    '    }',
+    '  }',
+    '}',
+    '',
+    'export {};',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Writes the generated element declarations into a provisioned workspace.
+ * No-op unless the system is custom-element-shaped.
+ */
+export function writeCustomElementTypes(cfg: SystemConfig, destDir: string, catalog: SystemCatalog): void {
+  if (cfg.componentModel !== 'custom-elements') return;
+  mkdirSync(join(destDir, 'src'), { recursive: true });
+  writeFileSync(join(destDir, 'src', 'system-elements.d.ts'), renderCustomElementTypes(catalog), 'utf8');
+}
+
 export interface ProvisionOptions {
   system: SystemId;
   systemCfg: SystemConfig;
   context: ContextLevel;
   destDir: string;
+  /**
+   * Extracted ground truth, used to generate JSX types for a custom-element
+   * system and ignored for other component models. Required rather than
+   * optional: runBench loads every involved system's assets up front and
+   * throws "ground truth missing" there, so a provision with no catalog is
+   * unreachable, and an optional field would only invite a silent skip.
+   */
+  catalog: SystemCatalog;
 }
 
 /** Copies a fixture template dir into destDir, excluding any node_modules. Exported for tests. */
@@ -500,7 +684,7 @@ async function commitBaseline(destDir: string): Promise<void> {
 }
 
 export async function provisionWorkspace(opts: ProvisionOptions): Promise<void> {
-  const { system, systemCfg, context, destDir } = opts;
+  const { system, systemCfg, context, destDir, catalog } = opts;
   const srcTemplateDir = templateDir(system, systemCfg);
 
   if (!existsSync(join(srcTemplateDir, 'node_modules'))) {
@@ -513,6 +697,9 @@ export async function provisionWorkspace(opts: ProvisionOptions): Promise<void> 
   substitutePlaceholders(destDir, systemCfg);
   applyFoundationsCssPlaceholder(destDir, systemCfg);
   applyCssEntryPlaceholder(destDir, systemCfg.cssEntry);
+  // Before commitBaseline, so the generated declarations are part of the
+  // baseline tree and collect.ts does not read them as agent-authored.
+  writeCustomElementTypes(systemCfg, destDir, catalog);
   linkNodeModules(srcTemplateDir, destDir);
   injectContext(systemCfg, context, destDir);
   await commitBaseline(destDir);

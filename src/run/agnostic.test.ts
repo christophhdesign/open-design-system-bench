@@ -11,8 +11,15 @@ import { join } from 'node:path';
 
 import type { BenchConfig, BenchProfile, SystemCatalog, SystemConfig, Task } from '../types.ts';
 import { cellKey } from '../types.ts';
+import { PKG_ROOT } from '../config.ts';
 import { expandMatrix } from './matrix.ts';
-import { injectContextForTest } from './fixture.ts';
+import {
+  injectContextForTest,
+  isSelfContainedType,
+  renderCustomElementTypes,
+  templateDir,
+  writeCustomElementTypes,
+} from './fixture.ts';
 import { validateTaskSuite } from '../tasks/load.ts';
 
 // ---------------------------------------------------------------------------
@@ -266,5 +273,170 @@ test('injectContext warns when an extraDocs glob matches nothing', async () => {
     console.warn = realWarn;
     rmSync(root, { recursive: true, force: true });
     rmSync(dest, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Custom-element fixture selection and generated JSX types
+// ---------------------------------------------------------------------------
+
+const ceBaseCfg: SystemConfig = {
+  root: '/fake/sys',
+  rootEnv: 'FAKE_SYS_DIR',
+  componentsSrc: 'packages/components/src',
+  componentsPkg: '@fake/elements',
+  foundationsPkg: '@fake/tokens',
+  catalogStrategy: 'docgen',
+  agentContext: { agentsMd: [] },
+};
+
+test('templateDir picks the custom-elements template for a custom-element system', () => {
+  assert.match(templateDir('sys', { ...ceBaseCfg, componentModel: 'custom-elements' }), /custom-elements-app$/);
+  // Default and explicit 'react' both keep the existing React template.
+  assert.match(templateDir('sys', ceBaseCfg), /source-app$/);
+  assert.match(templateDir('sys', { ...ceBaseCfg, componentModel: 'react' }), /source-app$/);
+  // An explicit per-system template still wins over the component model.
+  assert.equal(
+    templateDir('sys', { ...ceBaseCfg, componentModel: 'custom-elements', fixtureTemplate: 'fixtures/npm-app' }),
+    join(PKG_ROOT, 'fixtures/npm-app'),
+  );
+});
+
+const elementCatalog: SystemCatalog = {
+  system: 'sys',
+  generatedAt: '2026-09-03T00:00:00.000Z',
+  source: { root: '/fake/sys', commit: 'abc', srcHash: 'h' },
+  components: [
+    {
+      dir: 'ds-button',
+      exports: [
+        {
+          displayName: 'ds-button',
+          description: 'A button.',
+          props: [
+            { name: 'variant', type: '"primary" | "muted"', required: false },
+            { name: 'loading', type: 'boolean', required: false },
+            { name: 'controlType', type: '"icon" | "text"', required: false },
+            // References a symbol that does not exist in the generated file.
+            { name: 'config', type: 'ButtonConfig', required: false },
+            { name: 'spacing', type: '"none" | Spacing', required: false },
+            // Collides with React's own HTMLAttributes['hidden'], which is
+            // boolean: an intersection would narrow this to never.
+            { name: 'hidden', type: '"yes" | "no"', required: false },
+          ],
+        },
+      ],
+    },
+  ],
+  allExports: ['ds-button', 'DsButton', 'setAssetPath'],
+  allPropsByExport: {
+    'ds-button': ['variant', 'loading', 'controlType', 'config', 'spacing', 'hidden', 'control-type', 'onPressed'],
+    DsButton: ['variant', 'loading', 'controlType', 'config', 'spacing', 'hidden', 'control-type', 'onPressed'],
+    setAssetPath: [],
+  },
+};
+
+test('renderCustomElementTypes declares every element tag, and only tags', () => {
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(out, /"ds-button": ElementAttributes<\{/);
+  // The description becomes a doc comment an agent can read.
+  assert.match(out, /\* A button\./);
+  // A dash is the custom-element spec's own rule for what is an element, so
+  // the PascalCase wrapper spelling and runtime helpers are excluded — they
+  // are importable symbols, not tags, and declaring them as JSX intrinsics
+  // would invite the agent to write <DsButton> and <setAssetPath>.
+  assert.ok(!out.includes('"DsButton"'), 'class-name spelling must not become a JSX intrinsic');
+  assert.ok(!out.includes('"setAssetPath"'), 'runtime helper must not become a JSX intrinsic');
+});
+
+test('renderCustomElementTypes emits real prop types so invented VALUES fail to compile', () => {
+  // Typing every prop `unknown` made an invented value invisible to the whole
+  // harness: apiFidelity checks prop names only, so nothing checked values.
+  // Measured on a real run before this landed, models wrote size="small",
+  // padding="large", state="info" and variant="danger" against elements that
+  // accept none of them, and scored 100 on both apiFidelity and compile.
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(out, /"variant"\?: "primary" \| "muted";/);
+  assert.match(out, /"loading"\?: boolean;/);
+  // An attribute alias accepts exactly what the prop it re-spells accepts.
+  assert.match(out, /"control-type"\?: "icon" \| "text";/);
+});
+
+test('renderCustomElementTypes degrades a type it cannot resolve to unknown', () => {
+  // The fixture compiles with skipLibCheck, so an unresolvable type name here
+  // is not reported at all — it just silently makes the prop accept anything,
+  // which is the exact blindness emitting real types is meant to remove.
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(out, /"config"\?: unknown;/, 'a referenced interface must not be emitted verbatim');
+  assert.match(out, /"spacing"\?: unknown;/, 'a union mixing literals with a named type must degrade whole');
+  assert.match(out, /"onPressed"\?: unknown;/, 'an alias with no catalog type of its own stays unknown');
+  assert.ok(!out.includes('ButtonConfig'), out.slice(0, 400));
+  assert.ok(!out.includes('Spacing'), out.slice(0, 400));
+});
+
+test('renderCustomElementTypes subtracts each element\'s own keys from the React base', () => {
+  // Two failures in one, both of which fail compile on CORRECT code:
+  //
+  //   - An intersection narrows a shared key instead of replacing it, so this
+  //     catalog's `hidden: "yes" | "no"` meeting React's boolean `hidden`
+  //     collapses to never and rejects every value, the documented ones
+  //     included.
+  //   - HTMLAttributes carries neither `key` nor `ref`; native elements get
+  //     them from DetailedHTMLProps. Without it, rendering a list of elements
+  //     does not compile.
+  const out = renderCustomElementTypes(elementCatalog);
+
+  assert.match(
+    out,
+    /type ElementAttributes<P> = Omit<DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement>, keyof P> & P;/,
+  );
+  assert.match(out, /"hidden"\?: "yes" \| "no";/);
+});
+
+test('renderCustomElementTypes declares class and for once, never twice', () => {
+  // The HTML spellings are added to every element, and a catalog is free to
+  // document them too. A duplicate key in a type literal is a redeclaration.
+  const withClassProp: SystemCatalog = {
+    ...elementCatalog,
+    allPropsByExport: { ...elementCatalog.allPropsByExport, 'ds-button': ['class', 'for', 'variant'] },
+  };
+  const out = renderCustomElementTypes(withClassProp);
+  assert.equal(out.match(/"class"\?:/g)?.length, 1);
+  assert.equal(out.match(/"for"\?:/g)?.length, 1);
+});
+
+test('isSelfContainedType accepts literal unions and primitives, rejects everything else', () => {
+  for (const t of ['"a" | "b"', 'boolean', 'string', 'number', '"a"', '1 | 2', '"a" | undefined', 'null']) {
+    assert.equal(isSelfContainedType(t), true, `${t} should be emittable`);
+  }
+  for (const t of [
+    'ButtonConfig',
+    '"none" | Spacing',
+    'string[]',
+    '{ open: boolean }',
+    '(e: Event) => void',
+    'EventEmitter<string>',
+    'Record<string, unknown>',
+    undefined,
+    '',
+    'unknown',
+  ]) {
+    assert.equal(isSelfContainedType(t), false, `${String(t)} should degrade to unknown`);
+  }
+});
+
+test('writeCustomElementTypes is a no-op for a react system', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'odsys-ce-types-'));
+  try {
+    writeCustomElementTypes(ceBaseCfg, dir, elementCatalog);
+    assert.ok(!existsSync(join(dir, 'src', 'system-elements.d.ts')), 'react systems get no element declarations');
+
+    writeCustomElementTypes({ ...ceBaseCfg, componentModel: 'custom-elements' }, dir, elementCatalog);
+    assert.ok(existsSync(join(dir, 'src', 'system-elements.d.ts')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

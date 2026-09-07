@@ -421,3 +421,132 @@ test('composeResult worst-case gate ordering: fail beats review beats pass', () 
   ]);
   assert.equal(result.gate, 'fail');
 });
+
+// ---------------------------------------------------------------------------
+// apiFidelity for a custom-element system
+// ---------------------------------------------------------------------------
+//
+// A web-component library has no per-component import: the bundle registers
+// the elements once and consumers write tags. Import-anchored usage detection
+// therefore scored a flawless answer as "no design-system components used" —
+// zero, hard fail, the harness's own worst-outcome signal fired on the best
+// possible output.
+
+const ceCatalog: SystemCatalog = {
+  system: 'systemCE',
+  generatedAt: new Date().toISOString(),
+  source: { root: '/fake/systemCE', commit: 'deadbeef', srcHash: 'hash' },
+  components: [
+    { dir: 'ds-button', exports: [{ displayName: 'ds-button', description: 'A button', props: [] }] },
+    { dir: 'ds-alert', exports: [{ displayName: 'ds-alert', description: 'An alert', props: [] }] },
+  ],
+  // As the stencil strategy builds it: the tags, plus the PascalCase class-name
+  // spelling of each, plus whatever the barrel walk reached.
+  allExports: ['ds-button', 'ds-alert', 'DsButton', 'DsAlert', 'setAssetPath'],
+  allPropsByExport: {
+    'ds-button': ['variant', 'width', 'control-type'],
+    DsButton: ['variant', 'width', 'control-type'],
+    'ds-alert': ['state'],
+    DsAlert: ['state'],
+    setAssetPath: [],
+  },
+};
+
+const ceCfg: SystemConfig = {
+  ...systemCfg,
+  componentsPkg: '@acme-ui/elements',
+  componentModel: 'custom-elements',
+  contamination: undefined,
+};
+
+function makeCeCtx(files: AnalyzedFile[]): GradeContext {
+  return { system: 'systemCE', systemCfg: ceCfg, catalog: ceCatalog, tokens, task, files, workspaceDir: '/fake/workspace' };
+}
+
+test('gradeApiFidelity counts import-less custom-element tags as design-system usage', () => {
+  const ctx = makeCeCtx([
+    file('src/task/index.tsx', `export function T() { return <ds-button variant="muted">Go</ds-button>; }\n`),
+  ]);
+  const r = gradeApiFidelity(ctx);
+  assert.equal(r.gate, 'pass', JSON.stringify(r.diffs));
+  assert.equal(r.score, 100);
+  assert.ok(
+    !r.diffs.some((d) => d.message.includes('no design-system components used')),
+    'a correct custom-element answer must not read as ignoring the design system',
+  );
+});
+
+test('gradeApiFidelity accepts a kebab attribute alias and the HTML class spelling', () => {
+  const ctx = makeCeCtx([
+    file('src/task/index.tsx', `export function T() { return <ds-button control-type="text" class="mt-4" aria-label="Go" />; }\n`),
+  ]);
+  assert.equal(gradeApiFidelity(ctx).gate, 'pass');
+});
+
+test('gradeApiFidelity still flags an invented prop on a custom element', () => {
+  const ctx = makeCeCtx([
+    file('src/task/index.tsx', `export function T() { return <ds-alert severity="error" />; }\n`),
+  ]);
+  const r = gradeApiFidelity(ctx);
+  assert.equal(r.gate, 'review');
+  assert.ok(r.diffs.some((d) => d.message.includes("Invented prop 'severity'")), JSON.stringify(r.diffs));
+});
+
+test('gradeApiFidelity fails a custom-element system that used no elements at all', () => {
+  const ctx = makeCeCtx([
+    file('src/task/index.tsx', `export function T() { return <div><button>Go</button></div>; }\n`),
+  ]);
+  const r = gradeApiFidelity(ctx);
+  assert.equal(r.gate, 'fail');
+  assert.equal(r.score, 0);
+  assert.ok(r.diffs.some((d) => d.message.includes('no design-system components used')));
+});
+
+test('gradeApiFidelity resolves only DASHED tags, so a bare PascalCase catalog export is not usage', () => {
+  // 'DsButton' is in allExports on purpose — the stencil strategy records the
+  // class-name spelling as a gradeable export. But it is not an element, it is
+  // not declared as a JSX intrinsic, and with no import there is nothing tying
+  // this tag to the design system. Resolving it would grade an agent's own
+  // local component against ds-button's props.
+  const ctx = makeCeCtx([
+    file('src/task/index.tsx', `export function T() { return <DsButton variant="muted">Go</DsButton>; }\n`),
+  ]);
+  const r = gradeApiFidelity(ctx);
+  assert.equal(r.gate, 'fail');
+  assert.equal(r.score, 0);
+  assert.ok(r.diffs.some((d) => d.message.includes('no design-system components used')));
+});
+
+test('gradeApiFidelity does not grade a locally defined component that shares a catalog export name', () => {
+  // The agent factors out its own <Wrapper>, and the barrel walk happens to
+  // have merged a re-exported type of the same name into allExports. Its props
+  // are its own business.
+  const localNameCatalog: SystemCatalog = {
+    ...ceCatalog,
+    allExports: [...ceCatalog.allExports, 'Wrapper'],
+    allPropsByExport: { ...ceCatalog.allPropsByExport, Wrapper: ['state'] },
+  };
+  const ctx: GradeContext = {
+    ...makeCeCtx([
+      file(
+        'src/task/index.tsx',
+        `function Wrapper({ heading }: { heading: string }) { return <h2>{heading}</h2>; }
+export function T() { return <><Wrapper heading="x" /><ds-alert state="info" /></>; }\n`,
+      ),
+    ]),
+    catalog: localNameCatalog,
+  };
+  const r = gradeApiFidelity(ctx);
+  assert.equal(r.gate, 'pass', JSON.stringify(r.diffs));
+  assert.equal(r.score, 100);
+});
+
+test('gradeApiFidelity leaves the react model import-anchored: a bare tag is not system usage', () => {
+  // Same source under the default 'react' model. "Button" is a catalog export
+  // but nothing was imported, so this is still the ignored-the-system case —
+  // tag resolution must not leak into the react path.
+  const ctx = makeCtx([file('src/App.tsx', `export function T() { return <Button variant="x" />; }\n`)]);
+  const r = gradeApiFidelity(ctx);
+  assert.equal(r.gate, 'fail');
+  assert.ok(r.diffs.some((d) => d.message.includes('no design-system components used')));
+});

@@ -465,6 +465,14 @@ function buildSystemConfig(answers: InitAnswers, cwd: string): SystemConfig {
     },
   };
 
+  // A Stencil build produces custom elements by definition, so infer the
+  // consumption model rather than asking. Without this the wizard writes a
+  // config that provisions the React fixture and scores a perfect answer zero
+  // on apiFidelity ("no design-system components used"), which is the exact
+  // trap componentModel exists to avoid. A Lit or hand-rolled system has no
+  // such tell and has to set componentModel itself.
+  if (catalogStrategy === 'stencil') cfg.componentModel = 'custom-elements';
+
   if (answers.foundationsCss) cfg.foundationsCss = answers.foundationsCss;
   if (catalogStrategy !== 'docgen' && answers.catalogFile) cfg.catalogFile = answers.catalogFile;
   if (answers.skillDirs?.length) cfg.agentContext.skillDirs = answers.skillDirs;

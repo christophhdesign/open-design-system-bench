@@ -18,6 +18,27 @@ source and is not part of the shipped repo.
 
 ## What exists and works (verified 2026-08-27, full test suite green)
 
+- **Web-component systems are first-class.** `SystemConfig.componentModel` is `'react'` (default)
+  or `'custom-elements'`. The latter selects `fixtures/custom-elements-app`, makes apiFidelity
+  resolve **dashed** JSX tags straight against the catalog instead of requiring an import from
+  componentsPkg, and has `provisionWorkspace` generate `src/system-elements.d.ts` from the extracted
+  catalog so those tags typecheck. Four rules that look wrong until you hit them: (1) the
+  custom-elements fixture must NOT alias the system's source in tsconfig, only in Vite — pulling a
+  Stencil library's source into the fixture's TS program compiles it under the wrong compiler
+  options and fails the compile dimension on every cell with errors from the system's own source;
+  the entry is an opaque ambient module in `src/system-module.d.ts` instead. (2) apiFidelity's
+  import anchor is what makes the react model correct, so tag resolution is gated on componentModel
+  and must not leak into the react path. (3) Tag resolution is gated on a dash as well, because
+  allExports deliberately holds more than tags (the stencil strategy's PascalCase class names, the
+  barrel walk's runtime helpers and types) and resolving those would grade an agent's own local
+  component against an element's props. `renderCustomElementTypes` uses the same dash rule, so the
+  grader and the compiler agree on what an element is. (4) The generated per-element type is
+  `Omit<DetailedHTMLProps<...>, keyof P> & P`, not an intersection with `HTMLAttributes`: an
+  intersection narrows a shared key rather than replacing it (an element's own `hidden: "yes"|"no"`
+  meets React's boolean and collapses to `never`), and `HTMLAttributes` alone carries neither `key`
+  nor `ref`, so rendering a list of elements would not compile. Note also that the fixture compiles
+  with `skipLibCheck`, so a bad type in that generated file is not reported at all — it silently
+  makes the prop accept anything, which is why `isSelfContainedType` stays conservative.
 - **Fully system-agnostic.** Systems are arbitrary string ids declared in
   `systems.config.json` (`{ "systems": { "<id>": SystemConfig } }`). The root config ships a
   `my-system` placeholder that `init` fills in. A config may declare `"dataDir"` to ship its own
@@ -134,7 +155,8 @@ source and is not part of the shipped repo.
 systems.config.json      systems registry (--config to swap in another)
 bench.config.json        profiles, defaults, providers, ci thresholds
 tasks/                   10 domain-neutral starter tasks (YAML)
-fixtures/                source-app (generic source-alias), npm-app (generic npm-consume)
+fixtures/                source-app (generic source-alias), npm-app (generic npm-consume),
+                         custom-elements-app (generic, web-component systems)
 src/cli.ts               all commands: doctor|init|extract|validate-tasks|run|grade|judge|
                          report|compare|leaderboard|ci|prune|audit
 src/config.ts            config + .env loading, dir resolution
