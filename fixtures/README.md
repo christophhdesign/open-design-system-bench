@@ -48,7 +48,7 @@ Then point at it from your system's entry in `systems.config.json`:
 
 ## Placeholders
 
-At provision time the harness substitutes three placeholders across `vite.config.ts`,
+At provision time the harness substitutes these placeholders across `vite.config.ts`,
 `tsconfig.json`, `index.html`, `src/App.tsx` and `src/main.tsx`:
 
 | Placeholder | Filled with |
@@ -56,11 +56,19 @@ At provision time the harness substitutes three placeholders across `vite.config
 | `__SYSTEM_ROOT__` | absolute path to the design system checkout, forward slashes on every platform |
 | `__COMPONENTS_PKG__` | `componentsPkg` from the system config |
 | `__FOUNDATIONS_PKG__` | `foundationsPkg` from the system config |
+| `__COMPONENTS_SRC__` | `componentsSrc` from the system config (relative to `__SYSTEM_ROOT__`) |
+| `__FOUNDATIONS_CSS__` | `foundationsCss` from the system config (relative to `__SYSTEM_ROOT__`), or a harmless dead value when the system has no `foundationsCss` |
 
-Note what is **not** substituted: where the components sit *inside* the checkout. `source-app`
-hardcodes a `packages/components/src` layout in its tsconfig paths and Vite aliases. A system that
-keeps components anywhere else needs its own template, even when nothing else about it is unusual.
-That is the most common reason to end up with a local fixture.
+`src/main.tsx`'s foundations stylesheet import is dropped entirely (not just pointed at a dead
+path) when `foundationsCss` is unset, mirroring how the npm-consume template drops its `cssEntry`
+import when that is unset.
+
+`__COMPONENTS_SRC__` and `__FOUNDATIONS_CSS__` mean `source-app` resolves whatever layout
+`componentsSrc`/`foundationsCss` describe, not only `packages/components/src`. What still isn't
+config-driven is a system's *deep-import convention* (some systems support
+`import { Button } from '@scope/components/button'` with a bespoke subpath shape) and anything
+about the repo beyond path layout — see "Getting a local template right" below for what else a
+local fixture typically needs to get right.
 
 ## Getting a local template right
 

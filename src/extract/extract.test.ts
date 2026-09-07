@@ -123,6 +123,83 @@ test('export * and named re-exports of the same dir merge with export * governin
   assert.equal(catalog.components.filter((c) => c.dir === 'Combo').length, 1, 'no duplicate dir entries');
 });
 
+test('export * as X namespace re-export (Chakra UI v3 dialog shape) surfaces the namespace head name', async () => {
+  // Mirrors packages/react/src/components/dialog/index.ts: a per-component
+  // dir's own index re-exports its named parts AND aliases a whole sibling
+  // module under one PascalCase namespace name
+  // (`export * as Dialog from './namespace'`). Both @babel/parser's
+  // ExportNamespaceSpecifier node and its dominant sibling shape
+  // (`export { X } from './dir'`, an ExportSpecifier) must surface in
+  // allExports — this catches the case where only the specifier form did.
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-namespace-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'dialog'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/namespace' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } }));
+  writeFileSync(join(src, 'index.ts'), "export * from './dialog';\n");
+  writeFileSync(
+    join(src, 'dialog', 'index.ts'),
+    ["export { DialogRoot } from './dialog-root';", "export * as Dialog from './namespace';"].join('\n'),
+  );
+  writeFileSync(join(src, 'dialog', 'dialog-root.tsx'), 'export const DialogRoot = () => <div />;\n');
+  // The namespace target itself just re-exports members under different
+  // names — it must never be expanded into `Dialog.Root`-style allExports
+  // entries; only the head name `Dialog` matters (the apiFidelity grader's
+  // sub-component path already keys off that head identifier).
+  writeFileSync(join(src, 'dialog', 'namespace.ts'), "export { DialogRoot as Root } from './dialog-root';\n");
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+
+  assert.ok(catalog.allExports.includes('Dialog'), 'namespace head name Dialog must be in allExports');
+  assert.ok(catalog.allExports.includes('DialogRoot'), 'the plain named re-export must still be in allExports');
+  assert.ok(
+    !catalog.allExports.some((name) => name.startsWith('Dialog.')),
+    'namespace members must not be expanded into Dialog.* entries',
+  );
+  assert.deepEqual(catalog.allPropsByExport.Dialog, [], 'Dialog is not docgen-documentable — empty prop list, not missing');
+});
+
+test('a runtime `Foo.displayName = "<pkg>/Foo"` literal does not rename the component away from its exported name', async () => {
+  // Mirrors Mantine (packages/@mantine/core/src/components/Paper/Paper.tsx):
+  // `Paper.displayName = '@mantine/core/Paper'` after the export. Without an
+  // explicit componentNameResolver, react-docgen-typescript may honor that
+  // literal, so comp.displayName is '@mantine/core/Paper', never matches the
+  // barrel-derived publicNames, and a fully extractable component falls back
+  // to the no-props placeholder. 119 Mantine components were affected.
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-displayname-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Paper'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/displayname' }));
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({ compilerOptions: { jsx: 'react-jsx', strict: true, module: 'esnext', moduleResolution: 'bundler' } }),
+  );
+  writeFileSync(join(src, 'index.ts'), "export * from './Paper';\n");
+  writeFileSync(join(src, 'Paper', 'index.ts'), "export { Paper } from './Paper';\nexport type { PaperProps } from './Paper';\n");
+  writeFileSync(
+    join(src, 'Paper', 'Paper.tsx'),
+    [
+      'export interface PaperProps { withBorder?: boolean; radius?: string }',
+      'export const Paper = (props: PaperProps) => <div data-border={props.withBorder}>{props.radius}</div>;',
+      "Paper.displayName = '@test/displayname/Paper';",
+    ].join('\n'),
+  );
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+
+  assert.ok(catalog.allExports.includes('Paper'), 'Paper must be in allExports under its exported name');
+  assert.ok(
+    !catalog.allExports.some((name) => name.includes('/')),
+    'the runtime displayName literal must never leak into allExports',
+  );
+  assert.deepEqual(
+    [...(catalog.allPropsByExport.Paper ?? [])].sort(),
+    ['radius', 'withBorder'],
+    'props must be extracted under the exported name, not dropped as an internal helper',
+  );
+  rmSync(root, { recursive: true, force: true });
+});
+
 // ---------------------------------------------------------------------------
 // Monorepo field-test regressions (Chakra UI / Mantine): tsconfig resolution,
 // barrel-of-barrels recursion, NodeNext .js specifiers, outside-srcDir

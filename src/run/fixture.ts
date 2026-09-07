@@ -42,9 +42,37 @@ const NPM_CACHE_DIR = join(PKG_ROOT, '.npm-cache');
 const SYSTEM_ROOT_PLACEHOLDER = '__SYSTEM_ROOT__';
 const COMPONENTS_PKG_PLACEHOLDER = '__COMPONENTS_PKG__';
 const FOUNDATIONS_PKG_PLACEHOLDER = '__FOUNDATIONS_PKG__';
+// Where the components/foundations actually sit inside __SYSTEM_ROOT__ — filled
+// from the system's own componentsSrc / foundationsCss config, so source-app
+// works for any repo layout, not just packages/components/src.
+const COMPONENTS_SRC_PLACEHOLDER = '__COMPONENTS_SRC__';
+const FOUNDATIONS_CSS_PLACEHOLDER = '__FOUNDATIONS_CSS__';
+// Substituted into tsconfig/vite.config's __FOUNDATIONS_CSS__ path segment when
+// the system has no foundationsCss configured. Never actually resolved: the
+// corresponding import is dropped from main.tsx by applyFoundationsCssPlaceholder,
+// so this is a harmless, self-explaining dead mapping rather than a real path.
+const FOUNDATIONS_CSS_FALLBACK = 'foundations-css-not-configured.css';
 const SUBSTITUTED_FILES = ['vite.config.ts', 'tsconfig.json', 'index.html', 'src/App.tsx', 'src/main.tsx'];
 const CSS_ENTRY_PLACEHOLDER = '__CSS_ENTRY__';
-const CSS_ENTRY_PLACEHOLDER_LINE = `import '${CSS_ENTRY_PLACEHOLDER}';\n`;
+const FOUNDATIONS_CSS_ENTRY_PLACEHOLDER = '__FOUNDATIONS_CSS_ENTRY__';
+
+/**
+ * Shared implementation behind applyCssEntryPlaceholder (npm mode) and
+ * applyFoundationsCssPlaceholder (source mode): rewrites (importSpecifier set)
+ * or removes (importSpecifier absent) a single `import '<placeholder>';` line
+ * in destDir/src/main.tsx. No-op if the file, or that exact line, is absent.
+ */
+function applyImportLinePlaceholder(destDir: string, placeholder: string, importSpecifier: string | undefined): void {
+  const mainPath = join(destDir, 'src', 'main.tsx');
+  if (!existsSync(mainPath)) return;
+  const content = readFileSync(mainPath, 'utf8');
+  const placeholderLine = `import '${placeholder}';\n`;
+  if (!content.includes(placeholderLine)) return;
+  const next = importSpecifier
+    ? content.replace(placeholderLine, `import '${importSpecifier}';\n`)
+    : content.replace(placeholderLine, '');
+  writeFileSync(mainPath, next, 'utf8');
+}
 
 const PUBLIC_NPM_REGISTRY = 'https://registry.npmjs.org/';
 const npmInstallArgs = (extra: string[] = []) => [
@@ -94,14 +122,24 @@ export function preparedNpmDir(system: SystemId): string {
  * be unit-tested without a real npm install.
  */
 export function applyCssEntryPlaceholder(destDir: string, cssEntry: string | undefined): void {
-  const mainPath = join(destDir, 'src', 'main.tsx');
-  if (!existsSync(mainPath)) return;
-  const content = readFileSync(mainPath, 'utf8');
-  if (!content.includes(CSS_ENTRY_PLACEHOLDER_LINE)) return;
-  const next = cssEntry
-    ? content.replace(CSS_ENTRY_PLACEHOLDER_LINE, `import '${cssEntry}';\n`)
-    : content.replace(CSS_ENTRY_PLACEHOLDER_LINE, '');
-  writeFileSync(mainPath, next, 'utf8');
+  applyImportLinePlaceholder(destDir, CSS_ENTRY_PLACEHOLDER, cssEntry);
+}
+
+/**
+ * Source-mode counterpart to applyCssEntryPlaceholder: rewrites or removes
+ * source-app's `import '__FOUNDATIONS_CSS_ENTRY__';` line. Source mode never
+ * imports a real npm specifier for the foundations stylesheet — it imports
+ * `${foundationsPkg}/index.css`, a bare specifier that vite.config.ts/
+ * tsconfig.json alias straight at __SYSTEM_ROOT__/__FOUNDATIONS_CSS__ — so
+ * when cfg.foundationsCss is unset the import is dropped entirely rather than
+ * rewritten, leaving those aliases pointing at nothing but never resolved.
+ */
+export function applyFoundationsCssPlaceholder(destDir: string, cfg: SystemConfig): void {
+  applyImportLinePlaceholder(
+    destDir,
+    FOUNDATIONS_CSS_ENTRY_PLACEHOLDER,
+    cfg.foundationsCss ? `${cfg.foundationsPkg}/index.css` : undefined,
+  );
 }
 
 /**
@@ -158,7 +196,8 @@ export interface ProvisionOptions {
   destDir: string;
 }
 
-function copyTemplate(templateDirPath: string, destDir: string): void {
+/** Copies a fixture template dir into destDir, excluding any node_modules. Exported for tests. */
+export function copyTemplate(templateDirPath: string, destDir: string): void {
   mkdirSync(destDir, { recursive: true });
   cpSync(templateDirPath, destDir, {
     recursive: true,
@@ -166,15 +205,22 @@ function copyTemplate(templateDirPath: string, destDir: string): void {
   });
 }
 
-/** Fills the generic source template's placeholders from the system's own config. */
-function substitutePlaceholders(destDir: string, cfg: SystemConfig): void {
+/**
+ * Fills the generic source template's placeholders from the system's own
+ * config. Exported so the source-mode copy + substitution step can be
+ * unit-tested without a real npm install, mirroring stageNpmTemplate's role
+ * for npm mode.
+ */
+export function substitutePlaceholders(destDir: string, cfg: SystemConfig): void {
   for (const rel of SUBSTITUTED_FILES) {
     const filePath = join(destDir, rel);
     if (!existsSync(filePath)) continue;
     const next = readFileSync(filePath, 'utf8')
       .split(SYSTEM_ROOT_PLACEHOLDER).join(cfg.root)
       .split(COMPONENTS_PKG_PLACEHOLDER).join(cfg.componentsPkg)
-      .split(FOUNDATIONS_PKG_PLACEHOLDER).join(cfg.foundationsPkg);
+      .split(FOUNDATIONS_PKG_PLACEHOLDER).join(cfg.foundationsPkg)
+      .split(COMPONENTS_SRC_PLACEHOLDER).join(cfg.componentsSrc)
+      .split(FOUNDATIONS_CSS_PLACEHOLDER).join(cfg.foundationsCss ?? FOUNDATIONS_CSS_FALLBACK);
     writeFileSync(filePath, next, 'utf8');
   }
 }
@@ -287,6 +333,7 @@ export async function provisionWorkspace(opts: ProvisionOptions): Promise<void> 
 
   copyTemplate(srcTemplateDir, destDir);
   substitutePlaceholders(destDir, systemCfg);
+  applyFoundationsCssPlaceholder(destDir, systemCfg);
   applyCssEntryPlaceholder(destDir, systemCfg.cssEntry);
   linkNodeModules(srcTemplateDir, destDir);
   injectContext(systemCfg, context, destDir);
