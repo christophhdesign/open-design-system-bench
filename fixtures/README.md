@@ -70,6 +70,33 @@ config-driven is a system's *deep-import convention* (some systems support
 about the repo beyond path layout — see "Getting a local template right" below for what else a
 local fixture typically needs to get right.
 
+## Docs and skills at the guided context levels
+
+`agentContext.extraDocs` and `agentContext.skillDirs` are injected at the `skill` context level.
+Two things about them are easy to get wrong:
+
+**A skill has to land where an agent looks for it**, which is
+`.claude/skills/<name>/SKILL.md`. `skillDirs` accepts either a single skill bundle or a directory
+containing several, and the harness tells them apart by looking for a `SKILL.md`. A path naming a
+directory *of* bundles used to be copied wholesale, putting every skill one level too deep and
+making all of them invisible.
+
+**`extraDocs` accepts globs**, and an entry containing `*` behaves differently from a literal path:
+
+| Entry | Lands at |
+|---|---|
+| `pkg/COMPONENTS.md` | `docs/COMPONENTS.md`, flattened to its basename |
+| `pkg/src/**/readme.md` | `docs/pkg/src/**/readme.md`, tree preserved |
+
+Globs preserve structure because flattening cannot work for them: a hundred files all named
+`readme.md` would overwrite each other down to one, and an index that links to its siblings by
+relative path only resolves if the tree is intact. Reach for a glob when the documentation worth
+giving the agent is scattered through the source tree rather than gathered in a docs directory -
+per-component API tables are the common case, and naming the parent directory instead would copy
+the entire implementation alongside them. A literal path that does not exist fails the provision; a
+glob that matches nothing cannot, so it is warned about by name instead. Watch for that warning,
+because the run continues either way and the agent is the one left short.
+
 ## Getting a local template right
 
 Three things reliably need attention, all of them the difference between measuring a design system
