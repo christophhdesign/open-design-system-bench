@@ -22,6 +22,26 @@ The harness ships with a **generic starter config** (`systems.config.json`, a si
 placeholder system) and the `init` wizard to fill it in. Nothing here is specific to one design
 system: point it at yours and every check, fixture, and grader resolves from your own config.
 
+## What's new (September 2026)
+
+Web-component systems are first-class, Stencil catalogs extract from `docs.json`, and written
+reports are a versioned contract. Full notes in [CHANGELOG.md](CHANGELOG.md).
+
+- **Web components.** Set `"componentModel": "custom-elements"` for Stencil, Lit, or a
+  custom-element registry. Dashed tags are graded against the catalog, types are generated so
+  invented attribute values fail compile, and a dedicated fixture ships in
+  `fixtures/custom-elements-app`.
+- **Stencil extraction.** `"catalogStrategy": "stencil"` reads the compiler's `docs.json`.
+  `foundationsCss` can be a list of token files, not only a single entry point.
+- **Written reports.** `report --stats` and `report --validate` produce quarter-over-quarter
+  markdown: fixed data layer, free interpretation layer, stable finding ids.
+- **Context injection.** A directory of skill bundles lands where agents look. `extraDocs`
+  accepts globs so per-component readmes inject without dragging in the whole source tree.
+- **Honest audits.** A check that cannot measure returns `null` instead of a made-up score.
+  Deprecation scoring credits `MIGRATION.md` / `UPGRADING.md`.
+- **Generic source fixtures follow your layout.** `source-app` substitutes `componentsSrc` and
+  `foundationsCss` instead of assuming `packages/components/src`.
+
 ## What gets measured
 
 Each cell produces an `EvalResult` (same `Gate`/score contract as `eval-harness/`):
