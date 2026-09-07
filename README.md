@@ -38,8 +38,10 @@ Each cell produces an `EvalResult` (same `Gate`/score contract as `eval-harness/
 Ground truth is **extracted, never hand-written**: `catalogStrategy: "docgen"` runs
 react-docgen-typescript over your `componentsSrc` (public API = root barrel ∪ package.json subpath
 exports); `catalogStrategy: "catalog-json"` reads a pre-built machine-readable catalog file your
-own repo already ships (`catalogFile`, extraction refuses a stale one). Tokens are parsed from
-your system's foundations CSS (`foundationsCss`, optional — omit it and token/contamination
+own repo already ships; `catalogStrategy: "stencil"` reads the `docs.json` a Stencil build emits
+from its `docs-json` output target. Both file-backed strategies name the file in `catalogFile`,
+and extraction refuses a stale one. Tokens are parsed from your system's foundations CSS
+(`foundationsCss`, one path or a list of them, optional — omit it and token/contamination
 checks are simply skipped, with a `doctor` warning).
 
 ## Prerequisites
@@ -90,9 +92,9 @@ there (or pass `--systems a,b`) to benchmark several at once.
 | `rootEnv` | yes | Env var name that can override `root` (e.g. for CI) |
 | `componentsSrc` | yes | Path (relative to `root`) to the components source dir |
 | `componentsPkg` / `foundationsPkg` | yes | The npm package names your system's components/tokens are imported from |
-| `foundationsCss` | no | Path to the foundations CSS file tokens are parsed from; omit if none |
-| `catalogStrategy` | yes | `"docgen"` (extract via react-docgen-typescript) or `"catalog-json"` (read a pre-built catalog file) |
-| `catalogFile` | `catalog-json` only | Path to that pre-built catalog JSON |
+| `foundationsCss` | no | Path to the foundations CSS tokens are parsed from, or a list of paths when the system splits tokens across one file per category (read as one concatenated document); omit if none |
+| `catalogStrategy` | yes | `"docgen"` (extract via react-docgen-typescript), `"catalog-json"` (read a pre-built catalog file), or `"stencil"` (read the `docs.json` a Stencil build emits) |
+| `catalogFile` | `catalog-json` and `stencil` | Path to the pre-built catalog JSON, or to Stencil's `docs.json` |
 | `agentContext.agentsMd` | yes | Files copied in as `AGENTS.md`/`CLAUDE.md` at context level `agents-md` |
 | `agentContext.skillDirs` / `agentContext.extraDocs` | no | Skill bundles / extra reference docs injected at context level `skill` |
 | `contamination` | no | Cross-system sentinel props + typography casing — only meaningful with 2+ systems configured |
@@ -142,10 +144,10 @@ React 18 needs pinning against the template's React 19:
 `root` still matters in `npm` mode — it's where `agentContext.agentsMd`/`skillDirs`/`extraDocs`
 are read from — it just no longer needs to be the design system's own repo; point it at wherever
 you keep AGENTS.md/README.md-style guidance for this system (the `init` wizard defaults it to the
-current directory). `catalogStrategy` still has to be `"docgen"` or `"catalog-json"` (there's no
-`"none"` in the schema); if you don't have an extraction strategy figured out yet, `init` persists
-`"docgen"` as a schema-valid placeholder and warns loudly that it needs editing before `extract`
-will do anything useful.
+current directory). `catalogStrategy` still has to be one of `"docgen"`, `"catalog-json"` or
+`"stencil"` (there's no `"none"` in the schema); if you don't have an extraction strategy figured
+out yet, `init` persists `"docgen"` as a schema-valid placeholder and warns loudly that it needs
+editing before `extract` will do anything useful.
 
 ## The static audit and the AI-Readiness Score
 

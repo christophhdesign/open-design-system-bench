@@ -261,9 +261,9 @@ test('stencil strategy fails with an actionable message when catalogFile is miss
 // ---------------------------------------------------------------------------
 //
 // A per-category token set with no aggregate CSS entry point is what pushed
-// foundationsCss from `string` to `string | string[]` (Admiral ships nineteen
-// files and only a .scss that `@use`s them). One file and several must behave
-// identically apart from the union.
+// foundationsCss from `string` to `string | string[]` (one production system
+// ships nineteen files and only a .scss that `@use`s them). One file and
+// several must behave identically apart from the union.
 
 test('foundationsCss accepts several files and reads them as one document', async () => {
   const root = mkdtempSync(join(tmpdir(), 'odsys-tokens-multi-'));

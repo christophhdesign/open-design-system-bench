@@ -46,8 +46,8 @@ source and is not part of the shipped repo.
   documents the tag). Staleness is checked by scanning componentsSrc recursively for `@Component(`
   tags, not by the flat readdir `catalog-json` uses.
 - **`foundationsCss` takes one path or a list.** Plenty of systems ship one file per token
-  category with no aggregate CSS entry point (Admiral: nineteen files under `packages/tokens/css/`,
-  aggregated only by a `.scss` that `@use`s them). A list is read as one concatenated document, so
+  category with no aggregate CSS entry point (one production system ships nineteen, aggregated
+  only by a `.scss` that `@use`s them). A list is read as one concatenated document, so
   cssVars/utilities are the union and cssHash covers the lot. Go through `readFoundationsCss` /
   `foundationsCssPaths` / `describeFoundationsCss` in `src/config.ts` rather than reading
   `cfg.foundationsCss` directly, so the single- and multi-file shapes cannot drift apart.

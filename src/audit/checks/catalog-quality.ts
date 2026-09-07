@@ -61,7 +61,9 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
       message: `No machine-readable catalog available for "${system}" (strategy: ${cfg.catalogStrategy}).`,
       fix: cfg.catalogFile
         ? `Expected ${cfg.catalogFile} to exist and be readable JSON.`
-        : 'Configure catalogFile, or run "npm run extract" for docgen strategies.',
+        : cfg.catalogStrategy === 'stencil'
+          ? "Point catalogFile at the docs.json emitted by Stencil's docs-json output target."
+          : 'Configure catalogFile, or run "npm run extract" for docgen strategies.',
     });
     return { id: 'catalog-quality', title: 'Catalog quality', score: null, findings };
   }
@@ -117,7 +119,16 @@ export async function checkCatalogQuality(system: SystemId, cfg: SystemConfig, d
   // a genuinely prop-less component (field test: 63% of Mantine's exports
   // had 0 props, none of it flagged). 30% is a judgment-call threshold for
   // "enough zero-prop exports that this looks systematic, not incidental".
-  const extractionSuspect = totalExports > 0 && pctZeroProp >= 30;
+  //
+  // The inference only holds where extraction can lose props. A stencil
+  // catalog is the compiler's own docs.json, which lists every @Prop() it
+  // saw, so a zero there is the system reporting a prop-less element rather
+  // than the harness failing to read one. Telling that team the coverage is a
+  // lower bound and to "fix extraction" is exactly the wrong advice, and the
+  // zero-prop finding above already reports the same exports with a fix that
+  // fits a compiler-emitted catalog.
+  const canLoseProps = cfg.catalogStrategy !== 'stencil';
+  const extractionSuspect = canLoseProps && totalExports > 0 && pctZeroProp >= 30;
 
   findings.push({
     severity: 'info',

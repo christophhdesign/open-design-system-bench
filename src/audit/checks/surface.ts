@@ -409,10 +409,16 @@ export async function checkSurface(system: SystemId, cfg: SystemConfig, dirs: Au
   const catalogLoad = await loadCatalogForAudit(system, cfg, dirs.catalogsDir);
   if (catalogLoad.catalog) {
     score += 20;
+    // Name the actual source: "pre-extracted snapshot" and "read live from the
+    // file you ship" are different claims about the system, and a Stencil
+    // system reading its own docs.json should not be credited as catalog-json.
+    const liveFile = cfg.catalogFile ?? 'configured catalogFile';
     const catalogEvidence =
       catalogLoad.source === 'catalog-json-live'
-        ? `catalog-json file (${cfg.catalogFile ?? 'configured catalogFile'})`
-        : 'pre-extracted catalog snapshot';
+        ? `catalog-json file (${liveFile})`
+        : catalogLoad.source === 'stencil-live'
+          ? `Stencil docs.json (${liveFile})`
+          : 'pre-extracted catalog snapshot';
     findings.push({ severity: 'info', message: `Machine-readable catalog found: ${catalogEvidence}.` });
   } else if (catalogLoad.source === 'empty-extract') {
     // Distinct from plain absence: a snapshot exists but was extracted with

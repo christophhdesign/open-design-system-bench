@@ -44,8 +44,8 @@ export interface SystemConfig {
   /**
    * Path(s) (relative to root) to the foundations CSS the token set is parsed
    * from. Accepts an array because plenty of systems split their tokens across
-   * one file per category (Admiral ships nineteen: palette.css, spacing.css,
-   * radius.css, ...) with no aggregate CSS entry point — only a .scss that
+   * one file per category (one production system ships nineteen: palette.css,
+   * spacing.css, radius.css, ...) with no aggregate CSS entry point — only a .scss that
    * `@use`s them, which is not something a dumb line scan should be asked to
    * resolve. Listed files are read in order and treated as one concatenated
    * document, so cssVars/utilities are the union and cssHash covers the lot.

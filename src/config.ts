@@ -123,9 +123,9 @@ export function requireFile(path: string, hint: string): string {
 // ---------------------------------------------------------------------------
 //
 // foundationsCss is `string | string[]`: a system whose tokens live in one
-// file names that file, and a system that splits them per category (Admiral's
-// Stencil monorepo ships nineteen files under packages/tokens/css/ and only a
-// .scss that `@use`s them) names them all. Every consumer — the extractor's
+// file names that file, and a system that splits them per category names them
+// all (one production Stencil monorepo ships nineteen files under its tokens
+// package and only a .scss that `@use`s them). Every consumer — the extractor's
 // token scan, the audit's tokens check, doctor, the init wizard — goes through
 // these two helpers so the single- and multi-file shapes can never drift apart.
 
