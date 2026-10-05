@@ -2,7 +2,7 @@
 // that a single-file schema check can't see (duplicate ids, weight sums, and —
 // given extracted system catalogs — prompt-leak and hidden-expectation checks).
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../config.ts';
 import type { SystemCatalog, SystemId, Task } from '../types.ts';
@@ -35,15 +35,24 @@ export function taskAppliesToSystem(task: Task, system: SystemId): boolean {
   return task.systems.includes(system);
 }
 
+/**
+ * Every task in `tasksDir`, plus those in its `hard/` subdirectory tagged
+ * `hard: true`. Lookups (grading, judging, the gallery) always want the
+ * superset; only a profile's "*" expansion leaves the hard ones out unless
+ * asked (see expandMatrix).
+ */
 export function loadTasks(tasksDir: string = paths.tasksDir): Task[] {
-  const files = readdirSync(tasksDir)
-    .filter((f) => /\.ya?ml$/i.test(f))
-    .sort((a, b) => a.localeCompare(b));
-
-  return files.map((file) => {
-    const yamlText = readFileSync(join(tasksDir, file), 'utf8');
-    return parseTask(yamlText, file);
-  });
+  const read = (dir: string, hard: boolean): Task[] => {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => /\.ya?ml$/i.test(f))
+      .sort((a, b) => a.localeCompare(b))
+      .map((file) => {
+        const task = parseTask(readFileSync(join(dir, file), 'utf8'), file);
+        return hard ? { ...task, hard: true } : task;
+      });
+  };
+  return [...read(tasksDir, false), ...read(join(tasksDir, 'hard'), true)];
 }
 
 export function validateTaskSuite(

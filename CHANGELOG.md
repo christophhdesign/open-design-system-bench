@@ -2,17 +2,22 @@
 
 What changed in open-design-system-bench, newest first. The project is GitHub-first (clone and run, no npm package), so dates are the record rather than published versions.
 
-## Unreleased
+## 1.3.0, 2026-10-05
 
-Field feedback from running the audit and smoke tests against a production React system built with Vite.
+Field feedback from running the audit and smoke tests against a production React system built with Vite, plus the tooling asked for at the talk: a screenshot gallery, hard tasks, and a bare run that is really bare.
 
 ### Added
 
 - **`tsconfig` system field.** Points the `docgen` strategy at the tsconfig that actually compiles the components. Without it, a solution-style root `tsconfig.json` (Vite's default: `"files": []` plus `references`) is followed to the reference that includes `componentsSrc`, and a warning names the file used. Before, the root's empty options left path aliases unresolved and the catalog came back with almost no props, which on the reporting system cost 5.7 audit points.
+- **`gallery` command and `ds-bench-gallery` skill.** `gallery [<runDir>...]` renders a UI gallery: a screenshot of what every ok cell rendered (each workspace is `vite build`-ed and captured with headless Chrome, cached as `screenshot.png` in the cell dir, with build failures shown on the card), rows per context level, cards per rep with score, gate, turns, cost and a dimensions drill-down, and a task picker, gate filter, context toggles and size slider. Several runs get a run picker. No new dependency: Chrome, Chromium or Edge on the machine, or `CHROME_PATH`.
+- **Provider `stream` flag.** `"stream": true` on an `openai`-kind provider streams the completion (SSE) and reassembles it client-side, for gateways that buffer whole completions and time out on long generations (HTTP 408 after 200 s on one gateway, which single-shot cells on the hard tasks exceed).
+- **Four hard tasks, opt-in.** `tasks/hard/` holds `bulk-member-actions`, `async-lookup-states`, `inline-profile-editing` and `keyboard-action-finder`, each combining several design-system patterns with state, async or keyboard work (selection with an indeterminate master control plus a confirmed bulk action; four async states plus stale-request handling; per-field edit mode plus an unsaved-changes guard; a keyboard-driven finder with focus return and listbox semantics). Prompts were checked against nine production catalogs for name leaks. A profile's `"*"` still means the ten starter tasks, so existing baselines are unchanged; `--hard` (or `"hard": true` in a profile) adds them, and the new `hard` profile is exactly that across all three contexts.
 
 ### Fixed
 
 - **Bare cells were not bare.** The agent loaded the operator's `~/.claude/CLAUDE.md`, user skills, plugins, hooks, effort level and auto-memory, and, since `runs/` sits inside this repo, the bench's own `CLAUDE.md` and `AGENTS.md`. Cells now pass `--setting-sources project` plus `claudeMdExcludes` for every directory above the workspace, so the workspace's own `CLAUDE.md` and `.claude/skills` are the only context left. `--restricted` was considered and rejected: it also drops those workspace files, which would make `agents-md` and `skill` identical to `bare`. The judge now runs with `--safe-mode` for the same reason. Results from earlier runs carried this context, so expect shifts when comparing against an older baseline.
+- **`pricing-catalog.json` is documented.** The optional model catalog at the package root (a gateway's `GET /v1/models` shape) supplies each model's real `max_tokens` and prices. Without it, single-shot cells send a 128k budget that Vertex-hosted Gemini rejects with HTTP 400, and cost stays n/a; that 400 now carries a hint naming the file. The file is gitignored.
+- **Single-shot JSON with a stray leading brace parses.** One open-weights model behind a gateway answers `{` on its own line before the real `{"files": ...}` object (3 of 4 hard-task cells, finish_reason=stop, payload otherwise complete). `extractJsonPayload` now skips that brace, the same way it already tolerates fences and prose, so the cell is graded instead of counted as an agent error.
 - **tokenDiscipline reads style sheets.** `.css` and `.scss` files the agent writes are collected and their declarations checked for raw hex/rgb colors and px/rem values, with comments, at-rules and selectors skipped, and `@apply` arbitrary values flagged. A system that keeps its styling in SCSS used to score 100 here whatever the stylesheet contained.
 
 ## 2026-09-07

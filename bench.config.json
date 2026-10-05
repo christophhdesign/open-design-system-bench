@@ -33,6 +33,14 @@
       "models": ["sonnet"],
       "tasks": "*",
       "reps": 3
+    },
+    "hard": {
+      "systems": ["my-system"],
+      "contexts": ["bare", "agents-md", "skill"],
+      "models": ["sonnet"],
+      "tasks": "*",
+      "hard": true,
+      "reps": 1
     }
   },
   "providers": {

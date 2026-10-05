@@ -103,6 +103,58 @@ test('chatComplete (openai kind) sends Authorization + /chat/completions + respo
   }
 });
 
+test('chatComplete (openai kind, stream: true) asks for SSE and reassembles deltas, finish_reason and the final usage chunk', async () => {
+  const { baseUrl, server, requests } = await startMockServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const chunks = [
+      { choices: [{ delta: { role: 'assistant', content: '' } }] },
+      { choices: [{ delta: { content: '{"hello":' } }] },
+      { choices: [{ delta: { content: ' "wor' } }] },
+      { choices: [{ delta: { content: 'ld"}' }, finish_reason: 'stop' }] },
+      { choices: [], usage: { prompt_tokens: 7, completion_tokens: 5 } },
+    ];
+    // Split one event across two writes to exercise the line buffer.
+    res.write(': keep-alive\n\n');
+    res.write(`data: ${JSON.stringify(chunks[0])}\n\ndata: ${JSON.stringify(chunks[1])}\n\n`);
+    const third = `data: ${JSON.stringify(chunks[2])}\n\n`;
+    res.write(third.slice(0, 12));
+    setTimeout(() => {
+      res.write(third.slice(12));
+      res.write(`data: ${JSON.stringify(chunks[3])}\n\ndata: ${JSON.stringify(chunks[4])}\n\ndata: [DONE]\n\n`);
+      res.end();
+    }, 20);
+  });
+
+  try {
+    const provider: ResolvedProvider = { id: 'gw', kind: 'openai', baseUrl, apiKey: 'sk-test-123', stream: true };
+    const result = await chatComplete(provider, {
+      user: 'say hi',
+      model: 'gpt-5.2',
+      jsonSchema: { name: 'greeting', schema: { type: 'object', properties: { hello: { type: 'string' } } } },
+    });
+
+    const body = requests[0]!.body as Record<string, unknown>;
+    assert.equal(body.stream, true);
+    assert.deepEqual(body.stream_options, { include_usage: true });
+    assert.equal(requests[0]!.headers.accept, 'text/event-stream');
+    assert.equal(result.text, '{"hello": "world"}');
+    assert.deepEqual(result.json, { hello: 'world' });
+    assert.deepEqual(result.usage, { inputTokens: 7, outputTokens: 5 });
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test('chatComplete (openai kind, stream: true) still raises UsageLimitError on a 429 before any stream starts', async () => {
+  const { baseUrl, server } = await startMockServer((_req, res) => sendJson(res, 429, { error: { message: 'rate limit' } }));
+  try {
+    const provider: ResolvedProvider = { id: 'gw', kind: 'openai', baseUrl, apiKey: 'sk-test-123', stream: true };
+    await assert.rejects(() => chatComplete(provider, { user: 'x', model: 'gpt-5.2' }), UsageLimitError);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // (b) kind: 'anthropic' — headers, path, tool_choice, parsed tool_use input
 // ---------------------------------------------------------------------------
@@ -320,7 +372,7 @@ test('api-oneshot generateWithResolvedProvider only writes files that stay under
   }
 });
 
-test('api-oneshot captures usage tokens, and leaves cost unset without a pricing catalog', async () => {
+test('api-oneshot captures usage tokens, and leaves cost unset for a model no pricing catalog knows', async () => {
   const { baseUrl, server } = await startMockServer((_req, res) => {
     sendJson(res, 200, {
       choices: [
@@ -351,7 +403,7 @@ test('api-oneshot captures usage tokens, and leaves cost unset without a pricing
       {
         workspaceDir,
         prompt: 'Implement the task.',
-        model: 'DeepSeek V4 Flash (Trusted)',
+        model: 'Unpriced Test Model 9000',
         provider: 'gateway',
         addDirs: [],
         timeoutMs: 10_000,
@@ -363,8 +415,10 @@ test('api-oneshot captures usage tokens, and leaves cost unset without a pricing
     assert.equal(result.ok, true);
     assert.equal(result.inputTokens, 2000);
     assert.equal(result.outputTokens, 400);
-    // No pricing catalog ships, so cost is deliberately unset rather than guessed.
-    assert.equal(result.costUsd, undefined, 'cost stays unset without a pricing catalog');
+    // Unpriced (no catalog row, whether or not the operator dropped a
+    // pricing-catalog.json at the package root), so cost is deliberately
+    // unset rather than guessed.
+    assert.equal(result.costUsd, undefined, 'cost stays unset for an unpriced model');
 
     const transcript = JSON.parse(readFileSync(transcriptPath, 'utf8')) as { usage?: unknown };
     assert.deepEqual(transcript.usage, { inputTokens: 2000, outputTokens: 400 });
@@ -391,8 +445,13 @@ test('extractJsonPayload tolerates fenced and prose-wrapped JSON', async () => {
   });
   assert.deepEqual(extractJsonPayload('Here is the implementation:\n```\n{"a":1}\n```\nLet me know!'), { a: 1 });
   assert.deepEqual(extractJsonPayload('Sure! {"a":{"b":2}} — hope that helps.'), { a: { b: 2 } });
+  // A stray `{` on its own line before the object (seen from GPT-OSS 120b behind a gateway).
+  assert.deepEqual(extractJsonPayload('{\n{"files":[{"path":"src/task/index.tsx","content":"x"}]}'), {
+    files: [{ path: 'src/task/index.tsx', content: 'x' }],
+  });
   assert.equal(extractJsonPayload('no json here at all'), undefined);
   assert.equal(extractJsonPayload('{"broken": '), undefined);
+  assert.equal(extractJsonPayload('{"a":\n{"b": 1'), undefined);
 });
 
 test('chatComplete falls back to the default token cap with no catalog, and honors an explicit override', async () => {

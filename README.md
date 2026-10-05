@@ -22,25 +22,24 @@ The harness ships with a **generic starter config** (`systems.config.json`, a si
 placeholder system) and the `init` wizard to fill it in. Nothing here is specific to one design
 system: point it at yours and every check, fixture, and grader resolves from your own config.
 
-## What's new (September 2026)
+## What's new (v1.3, October 2026)
 
-Web-component systems are first-class, Stencil catalogs extract from `docs.json`, and written
-reports are a versioned contract. Full notes in [CHANGELOG.md](CHANGELOG.md).
+A screenshot gallery of what the agents built, four opt-in hard tasks, and a bare run that is
+really bare. Full notes in [CHANGELOG.md](CHANGELOG.md).
 
-- **Web components.** Set `"componentModel": "custom-elements"` for Stencil, Lit, or a
-  custom-element registry. Dashed tags are graded against the catalog, types are generated so
-  invented attribute values fail compile, and a dedicated fixture ships in
-  `fixtures/custom-elements-app`.
-- **Stencil extraction.** `"catalogStrategy": "stencil"` reads the compiler's `docs.json`.
-  `foundationsCss` can be a list of token files, not only a single entry point.
-- **Written reports.** `report --stats` and `report --validate` produce quarter-over-quarter
-  markdown: fixed data layer, free interpretation layer, stable finding ids.
-- **Context injection.** A directory of skill bundles lands where agents look. `extraDocs`
-  accepts globs so per-component readmes inject without dragging in the whole source tree.
-- **Honest audits.** A check that cannot measure returns `null` instead of a made-up score.
-  Deprecation scoring credits `MIGRATION.md` / `UPGRADING.md`.
-- **Generic source fixtures follow your layout.** `source-app` substitutes `componentsSrc` and
-  `foundationsCss` instead of assuming `packages/components/src`.
+- **UI gallery.** `gallery [<runDir>...]` builds every ok cell, captures it with headless
+  Chrome, and lays the screenshots out per context level and rep next to their scores, with a
+  task picker, gate filter and size slider. A cell that scores 81 and renders an empty page is
+  finally visible as such.
+- **Hard tasks, opt-in.** `tasks/hard/` adds bulk selection with a confirmed destructive
+  action, an async lookup with every loading state, in-place editing with an unsaved-changes
+  guard, and a keyboard-driven action finder. `--hard` or the `hard` profile includes them.
+- **Bare means bare.** Cells no longer see the operator's `~/.claude/CLAUDE.md`, skills, hooks
+  or memory, nor this repo's own instructions. Compare older baselines with that in mind.
+- **Extraction and grading.** A Vite-style solution `tsconfig.json` is followed to the project
+  that compiles the components (or set `tsconfig`); tokenDiscipline reads `.css` and `.scss`.
+- **Gateways.** `"stream": true` on a provider for gateways that time out on long single-shot
+  generations; `pricing-catalog.json` supplies real `max_tokens` and prices.
 
 ## What gets measured
 
@@ -91,13 +90,16 @@ checks are simply skipped, with a `doctor` warning).
 ```bash
 npm run doctor            # verify the configured system(s), catalogs, claude CLI, task suite
 npm run extract           # regenerate catalogs/ + tokens/ from your system's repo
-npm run validate-tasks    # lint the task suite (incl. prompt-leak check) against tasks/*.yaml —
-                           # ten domain-neutral starter tasks, no hiddenExpectations required
+npm run validate-tasks    # lint the task suite (incl. prompt-leak check): ten domain-neutral
+                           # starter tasks in tasks/, four hard ones in tasks/hard/, no
+                           # hiddenExpectations required
 
 npx tsx src/cli.ts run --profile smoke            # 2 cells, ~5 min — sanity check
 npx tsx src/cli.ts run --profile small --label w35   # weekly regression
 npx tsx src/cli.ts run --profile medium --label aug  # monthly sweep
 npx tsx src/cli.ts run --profile full --label q3     # quarterly baseline
+npx tsx src/cli.ts run --profile hard --label q3     # starter + hard tasks, all contexts
+npx tsx src/cli.ts run --profile medium --hard       # any "*" profile plus tasks/hard/
 ```
 
 Cell counts in the profiles table below assume the default single-system template; each profile's
@@ -240,6 +242,11 @@ many systems are in scope — two configured systems doubles them.
 | `small` | `skill` × 5 tasks × 1 rep | 5 | **weekly**, and on docs/system PRs | did our latest changes regress agent compliance vs the frozen baseline |
 | `medium` | 2 enabled contexts × 10 tasks × 1 rep | 20 | **monthly** | full task coverage across the enabled guidance levels |
 | `full` | 3 contexts × 10 tasks × 3 reps | 90 | **quarterly** + before/after big changes (model updates, MCP) | the complete picture with means ± spread; the baseline everything else compares against |
+| `hard` | 3 contexts × 14 tasks (10 starter + 4 hard) × 1 rep | 42 | when the starter tasks all pass | where agents start to struggle: each hard task combines several patterns with state, async or keyboard work |
+
+A `"*"` task list means the ten starter tasks. The four in `tasks/hard/` join it only with `--hard` on
+the command line or `"hard": true` in the profile (which is all the `hard` profile adds), so existing
+baselines keep their task set. Naming a hard task in `--tasks` always works.
 
 Roughly ~$1.50/cell and 2–5 min/generation at concurrency 2 (varies by model and task).
 
@@ -260,12 +267,22 @@ Useful during iteration (no agent re-runs — they re-score stored diffs):
 npx tsx src/cli.ts grade --run runs/<id>     # re-run mechanical graders only
 npx tsx src/cli.ts judge --run runs/<id> --judge-model sonnet --judge-samples 3
 npx tsx src/cli.ts compare runs/<a> runs/<b> # side-by-side deltas (e.g. before/after a docs change)
+npx tsx src/cli.ts gallery runs/<a> [runs/<b>] # UI gallery: a screenshot of what every cell rendered,
+                                             # rows per context level, cards per rep, task picker
 
 npx tsx src/cli.ts prune                     # preview only — nothing is deleted
 npx tsx src/cli.ts prune --apply --keep 1    # drop workspaces from older finished runs
 npx tsx src/cli.ts prune --apply --older-than 7d
 npx tsx src/cli.ts prune --apply --run runs/<id>
 ```
+
+`gallery` builds each ok cell's workspace (`vite build`) and screenshots it with headless Chrome
+(Google Chrome, Chromium or Edge in the usual place, or `CHROME_PATH`), writing `screenshot.png`
+next to the cell's `grades.json`; a build or screenshot failure is recorded in
+`screenshot-error.txt` and shown on the card. Screenshots are cached per cell, so re-running
+`gallery` is cheap, and a cell whose `workspace/` was pruned keeps whatever screenshot it already
+has. Without Chrome the page still renders, with "no screenshot" cards. The html links its images
+by relative path, so keep it next to the run (the default `<runDir>/gallery.html`).
 
 `prune` is manual (the runner never calls it). It deletes per-cell `workspace/` copies after you are done retrying. In-flight runs and runs that still have timeout / error / pending cells are skipped so `--resume` / `--retry-errored` still have a tree to work in. Pass `--force` if you want to strip those anyway — retry still works, it provisions a fresh workspace. `--deep` also drops `files/` and breaks `grade --run`.
 
@@ -421,6 +438,21 @@ npx tsx src/cli.ts run --profile smoke
 
 `doctor` reports when `ANTHROPIC_BASE_URL` is set, so a gateway-routed run is visible in the
 environment check rather than silently different.
+
+**Model catalog (`pricing-catalog.json`, optional).** Single-shot cells send a completion budget
+with every request. Without a catalog that is a generic 128k `max_tokens`, which some providers
+reject (Vertex-hosted Gemini allows 65k and answers HTTP 400), and cost stays `n/a` because no
+prices are known. Drop a model catalog at the package root as `pricing-catalog.json` and both are
+fixed: it is read as `{ "data": [{ "name", "id", "available", "updated", "max_tokens",
+"pricing": { "input_cost_per_token", "output_cost_per_token", "cache_read_cost_per_token" } }] }`,
+the shape an OpenAI-compatible gateway's `GET /v1/models` typically returns. Models are matched by
+id, then by normalised name (suffixes such as `(Trusted)`, dates and regions are ignored). The
+file is gitignored; it describes your provider, not the harness.
+
+A provider entry can set `"stream": true` (`openai` kind only). The client then asks for SSE and
+reassembles the completion itself; scores are unaffected. Use it for a gateway that buffers whole
+completions and times out on long generations (one returns HTTP 408 after 200 s, which a
+single-shot cell on a hard task exceeds).
 
 **(c) Benchmark a non-claude model or a gateway-hosted model via a qualified model string.** A
 `provider:model` entry in `--models` (or `bench.config.json` profiles) is resolved against the

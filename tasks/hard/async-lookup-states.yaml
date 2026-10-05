@@ -1,0 +1,35 @@
+id: async-lookup-states
+title: Asynchronous lookup with narrowing and every loading state
+prompt: >-
+  Build the audit history screen: users type a query to find past events and
+  can narrow the matches by event kind and by time range. Matches load
+  asynchronously from the server. Users need to understand what is happening
+  while matches are on their way, when nothing matches, and when the request
+  fails (with a way to try again), and should always know how many matches
+  there are.
+rubrics:
+  - id: all-four-states
+    text: >-
+      Loading, no-match, failure and matches are four distinct states, each
+      rendered with the system's component for that purpose (loading indicator
+      or skeleton, empty state, inline error with a retry action) rather than
+      plain text
+    weight: 0.3
+    critical: true
+  - id: form-controls-labelled
+    text: >-
+      The query entry and the narrowing controls are system form controls with
+      associated labels; the time range uses the system's date or range control
+      where one exists
+    weight: 0.25
+  - id: status-exposed-to-at
+    text: >-
+      The match count and state transitions are exposed to assistive technology
+      (a live region or status role), not only visually
+    weight: 0.25
+  - id: stale-and-duplicate-requests
+    text: >-
+      A response from an earlier query is ignored once a newer query is in
+      flight (abort or request sequencing), and re-submitting while loading is
+      prevented
+    weight: 0.2

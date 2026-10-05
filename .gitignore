@@ -48,6 +48,8 @@ product.md
 INTERNAL.md
 # One organization's model/pricing catalog, not a generic mechanism yet.
 nexos-models.json
+# The operator's own copy of a provider model catalog (max_tokens + prices), see README.
+pricing-catalog.json
 
 # Fixture templates. Only the generic ones ship with the harness; a template
 # written for a specific design system describes that system's private repo

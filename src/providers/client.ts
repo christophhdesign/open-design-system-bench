@@ -16,6 +16,8 @@ export interface ResolvedProvider {
   kind: ProviderConfig['kind'];
   baseUrl: string;
   apiKey: string;
+  /** See ProviderConfig.stream ('openai' kind only). */
+  stream?: boolean;
 }
 
 export interface ChatRequest {
@@ -102,11 +104,23 @@ export function resolveProvider(id: string, bench: BenchConfig): ResolvedProvide
         `(kind: ${cfg.kind}, baseUrl: ${cfg.baseUrl})`,
     );
   }
-  return { id, kind: cfg.kind, baseUrl: cfg.baseUrl, apiKey };
+  return { id, kind: cfg.kind, baseUrl: cfg.baseUrl, apiKey, ...(cfg.stream ? { stream: true } : {}) };
 }
 
 function joinUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, '')}${path}`;
+}
+
+function httpError(status: number, url: string, bodyText: string): Error {
+  const snippet = bodyText.slice(0, BODY_SNIPPET_LEN);
+  if (status === 429 || looksLikeUsageLimit(bodyText)) return new UsageLimitError(`HTTP ${status} from ${url}: ${snippet}`);
+  // A provider rejecting the completion budget means the model has no
+  // pricing-catalog row, so resolveMaxTokens sent the generic fallback.
+  const hint =
+    status === 400 && /max_?(output_|completion_)?tokens/i.test(bodyText)
+      ? ' (the model is missing from pricing-catalog.json, so the fallback max_tokens was sent; add its row to send its real cap)'
+      : '';
+  return new Error(`HTTP ${status} from ${url}: ${snippet}${hint}`);
 }
 
 async function postJson(
@@ -129,15 +143,62 @@ async function postJson(
     json = undefined;
   }
 
-  if (!res.ok) {
-    const snippet = bodyText.slice(0, BODY_SNIPPET_LEN);
-    if (res.status === 429 || looksLikeUsageLimit(bodyText)) {
-      throw new UsageLimitError(`HTTP ${res.status} from ${url}: ${snippet}`);
-    }
-    throw new Error(`HTTP ${res.status} from ${url}: ${snippet}`);
-  }
+  if (!res.ok) throw httpError(res.status, url, bodyText);
 
   return { status: res.status, json, bodyText };
+}
+
+/**
+ * Streams an OpenAI-compatible chat completion (SSE) and reassembles it into
+ * the non-streaming envelope shape, so chatCompleteOpenAi does not care which
+ * path ran. Exists because a gateway that buffers whole completions times out
+ * on long generations; with bytes flowing it does not. Usage arrives in the
+ * final chunk when `stream_options.include_usage` is set.
+ */
+async function postSse(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<{ json: unknown }> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...headers },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) throw httpError(res.status, url, await res.text());
+
+  let content = '';
+  let finishReason: string | undefined;
+  let usage: unknown;
+  const handleLine = (line: string) => {
+    if (!line.startsWith('data:')) return;
+    const data = line.slice(5).trim();
+    if (!data || data === '[DONE]') return;
+    let evt: { choices?: Array<{ delta?: { content?: unknown }; finish_reason?: string }>; usage?: unknown };
+    try {
+      evt = JSON.parse(data);
+    } catch {
+      return; // keep-alive or malformed chunk
+    }
+    const choice = evt.choices?.[0];
+    if (typeof choice?.delta?.content === 'string') content += choice.delta.content;
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+    if (evt.usage) usage = evt.usage;
+  };
+  const decoder = new TextDecoder();
+  let buf = '';
+  for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+    buf += decoder.decode(chunk, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      handleLine(buf.slice(0, nl).trim());
+      buf = buf.slice(nl + 1);
+    }
+  }
+  handleLine(buf.trim());
+  return { json: { choices: [{ message: { content }, finish_reason: finishReason }], usage } };
 }
 
 // ---------------------------------------------------------------------------
@@ -176,7 +237,20 @@ export function extractJsonPayload(text: string): unknown {
     try {
       return JSON.parse(raw.slice(first, last + 1));
     } catch {
-      /* give up */
+      /* fall through */
+    }
+    // A stray opening brace on its own line before the real object
+    // (`{\n{"files": ...}`): seen repeatedly from one open-weights model
+    // behind a gateway, with finish_reason=stop and the payload otherwise
+    // complete. Same spirit as tolerating fences: the wrapper is the glitch,
+    // not the files.
+    const second = raw.indexOf('{', first + 1);
+    if (second > first && second < last && /^\{\s*$/.test(raw.slice(first, second))) {
+      try {
+        return JSON.parse(raw.slice(second, last + 1));
+      } catch {
+        /* give up */
+      }
     }
   }
   return undefined;
@@ -201,7 +275,12 @@ async function chatCompleteOpenAi(provider: ResolvedProvider, req: ChatRequest):
     };
   }
 
-  const { json } = await postJson(url, { authorization: `Bearer ${provider.apiKey}` }, body, req.signal);
+  if (provider.stream) {
+    body.stream = true;
+    body.stream_options = { include_usage: true };
+  }
+  const headers = { authorization: `Bearer ${provider.apiKey}` };
+  const { json } = provider.stream ? await postSse(url, headers, body, req.signal) : await postJson(url, headers, body, req.signal);
   const envelope = json as OpenAiChatResponse | undefined;
   const choice = envelope?.choices?.[0];
   const content = choice?.message?.content ?? '';

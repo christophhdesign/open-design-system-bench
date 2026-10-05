@@ -1,0 +1,33 @@
+id: bulk-member-actions
+title: Bulk actions on the team members screen
+prompt: >-
+  On the team members screen, users manage a long roster of people, each with
+  a name, email and role. Let users pick several people at once and either
+  remove them or change their role in one go. Users should always see how many
+  are picked, be able to pick or unpick everyone with a single action, and
+  removing people must not happen by accident.
+rubrics:
+  - id: row-selection
+    text: >-
+      Per-person selection uses the design system's selection control with an
+      accessible name that identifies the person, and the "everyone" control
+      reflects a partial selection (mixed/indeterminate) when only some are
+      picked
+    weight: 0.3
+    critical: true
+  - id: contextual-action-bar
+    text: >-
+      Bulk actions appear only while something is picked, show the picked
+      count, and are built from system components rather than ad hoc markup
+    weight: 0.25
+  - id: destructive-confirmation
+    text: >-
+      Removing picked people goes through the system's confirmation pattern,
+      states how many will be removed, and the destructive action is visually
+      distinct and not the default-focused action
+    weight: 0.25
+  - id: role-change-control
+    text: >-
+      Changing roles for everyone picked uses a system choice control with the
+      roles as options and applies in one action, not one person at a time
+    weight: 0.2

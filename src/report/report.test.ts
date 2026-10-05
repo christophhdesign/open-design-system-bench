@@ -388,7 +388,7 @@ test('renderReportHtml: reports no dollar figure when a record cannot be priced'
   const rec = makeRecord({
     system: 'systemB',
     context: 'bare',
-    model: 'gateway:GPT 5.6 Luna EU (Trusted)',
+    model: 'gateway:Unpriced Test Model 9000',
     taskId: 'task-a',
     rep: 1,
     status: 'ok',
@@ -401,8 +401,9 @@ test('renderReportHtml: reports no dollar figure when a record cannot be priced'
   delete rec.agentMeta!.costUsd;
   const html = renderReportHtml(buildRunResults(makeManifest('run-cost-fill', 'Cost fill', [rec]), [rec]));
   assert.match(html, /Total cost/);
-  // No pricing catalog ships, so an unpriced record must read as n/a rather
-  // than inventing a rate. Token counts are still reported.
+  // A model no pricing catalog knows (with or without an operator's
+  // pricing-catalog.json at the package root) must read as n/a rather than
+  // inventing a rate. Token counts are still reported.
   assert.match(html, /n\/a/);
   assert.ok(!html.includes('Adapters'));
 });

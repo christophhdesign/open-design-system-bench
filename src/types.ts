@@ -230,6 +230,8 @@ export interface TaskRubric {
 export interface Task {
   id: string;
   title: string;
+  /** Set by the loader for tasks under tasks/hard/: left out of a profile's "*" unless --hard (or the profile's `hard`) is set. Not a YAML field. */
+  hard?: boolean;
   /** Which configured systems this task applies to. Absent, or ['*'], means every configured system. */
   systems?: SystemId[];
   prompt: string; // intent-level; must NOT name catalog components
@@ -263,6 +265,8 @@ export interface BenchProfile {
   models: string[];
   tasks: string[] | '*';
   reps: number;
+  /** Include tasks/hard/ in a "*" task list. Default false, so the starter suite stays the baseline; `--hard` overrides per run. */
+  hard?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +288,13 @@ export interface ProviderConfig {
   baseUrl: string;
   /** Name of the env var holding the API key (never the key itself). */
   apiKeyEnv: string;
+  /**
+   * Stream the completion (SSE) and reassemble it client-side; 'openai' kind
+   * only. Set it for a gateway that buffers whole completions and times out
+   * on long generations (one returns HTTP 408 after 200 s; a single-shot
+   * cell on a hard task runs longer than that). Scores are unaffected.
+   */
+  stream?: boolean;
 }
 
 export interface BenchConfig {
