@@ -1,0 +1,34 @@
+id: keyboard-action-finder
+title: Keyboard-driven action finder
+prompt: >-
+  Let users jump anywhere in the product from the keyboard: a shortcut opens a
+  panel where they type to find actions and destinations, such as "Invite a
+  teammate", "Billing" or "Sign out". Up and down arrows move through the
+  matches, Enter runs the highlighted one, Escape closes the panel, and
+  keyboard focus goes back to where it was before. Recently used actions
+  appear before the user types anything.
+rubrics:
+  - id: focus-management
+    text: >-
+      Opening moves focus into the text entry and keeps it within the panel;
+      Escape closes it and focus returns to the previously focused element
+    weight: 0.3
+    critical: true
+  - id: listbox-semantics
+    text: >-
+      Matches are exposed with listbox/option semantics (or the system's
+      command or combobox equivalent), the highlighted match is conveyed via
+      aria-activedescendant or roving focus, and arrow keys wrap or stop
+      predictably
+    weight: 0.3
+  - id: system-overlay
+    text: >-
+      The panel is the system's overlay or command component, not a hand-rolled
+      fixed-position element, and the shortcut is shown in the system's
+      keyboard-hint style where one exists
+    weight: 0.2
+  - id: recents-and-no-match
+    text: >-
+      Recently used actions show before typing and persist across openings; a
+      no-match state is handled with clear copy
+    weight: 0.2

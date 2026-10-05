@@ -1,0 +1,33 @@
+id: inline-profile-editing
+title: Edit profile details in place with an unsaved-changes guard
+prompt: >-
+  On the profile screen, users can change their display name, email address
+  and time zone without leaving the page. Each value is edited and saved on its
+  own, invalid values are explained next to where they were typed, and users
+  can abandon an edit and get the previous value back. If a user tries to go
+  back to the previous screen while an edit is unsaved, warn them before
+  anything is lost.
+rubrics:
+  - id: per-field-edit-mode
+    text: >-
+      Each value toggles between a read view and an edit view built from system
+      controls, with its own save and cancel; cancel restores the previous value
+    weight: 0.3
+    critical: true
+  - id: inline-validation
+    text: >-
+      Invalid values produce the system's field-level error treatment,
+      programmatically associated with the control (via the system's form field
+      wrapper or aria-describedby)
+    weight: 0.25
+  - id: unsaved-changes-guard
+    text: >-
+      Leaving with an unsaved edit opens the system's confirmation pattern;
+      discarding is clearly distinct from continuing to edit and is not the
+      default-focused action
+    weight: 0.25
+  - id: save-feedback-and-hierarchy
+    text: >-
+      Saving shows a busy state on the control and brief non-blocking success
+      feedback afterwards; save is the primary action and cancel is secondary
+    weight: 0.2

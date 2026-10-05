@@ -161,7 +161,8 @@ source and is not part of the shipped repo.
 ```
 systems.config.json      systems registry (--config to swap in another)
 bench.config.json        profiles, defaults, providers, ci thresholds
-tasks/                   10 domain-neutral starter tasks (YAML)
+tasks/                   10 domain-neutral starter tasks (YAML); tasks/hard/ holds 4 hard ones that
+                         join a "*" task list only with --hard or a profile's "hard": true
 fixtures/                source-app (generic source-alias), npm-app (generic npm-consume),
                          custom-elements-app (generic, web-component systems)
 src/cli.ts               all commands: doctor|init|extract|validate-tasks|run|grade|judge|
@@ -174,7 +175,8 @@ src/run/                 matrix, fixture, collect, runner (pause/resume lives he
 src/agents/              claude-code (agentic), api-oneshot (single-shot), codex (stub), errors
 src/providers/           fetch clients (openai/anthropic wire formats), model-spec, pricing
 src/grade/               ast, mechanical/* (5 dimensions), judge, score
-src/report/              aggregate, html, compare, leaderboard, ci, shared; written-report
+src/report/              aggregate, html, compare, gallery (+ screenshots via headless Chrome),
+                         leaderboard, ci, shared; written-report
                          contract: stats (every computed number + the fixed outline),
                          document (parse + the validate gates), json-schema-lite, figures
 src/audit/               7 Tier-0 checks, score assembly, convention-lexicon.json
@@ -183,7 +185,8 @@ schema/                  report.schema.json - the written-report front-matter co
 docs/reports/            README, report-authoring.md (the contract in prose),
                          report-example.md; generated per-system reports land
                          here and are gitignored
-.claude/skills/          ds-bench-report: drives the report-authoring agent
+.claude/skills/          ds-bench-report: drives the report-authoring agent;
+                         ds-bench-gallery: wraps the gallery command
 ROADMAP.md               the plan: phase status, next tasks, eval catalog (internal, not
                          part of the shipped repo)
 ```

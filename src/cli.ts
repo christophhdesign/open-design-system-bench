@@ -3,7 +3,7 @@
 import { parseArgs } from 'node:util';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
   PKG_ROOT,
@@ -52,7 +52,9 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
   extract [--allow-stale] [--systems a,b]
                               extract catalogs + tokens from the configured systems' repos
   validate-tasks              lint the task suite against the extracted catalogs
-  run --profile <name> [--systems a,b] [--contexts a,b] [--models a,b] [--tasks a,b]
+  run --profile <name> [--systems a,b] [--contexts a,b] [--models a,b] [--tasks a,b] [--hard]
+                              --hard adds tasks/hard/ to a "*" task list (the hard
+                              profile sets it); explicit --tasks ids always work
       [--reps N] [--concurrency N] [--no-judge] [--judge-model m] [--judge-samples N]
       [--judge-provider id] [--label text]
                               run a benchmark matrix. A qualified "provider:model" entry in
@@ -96,6 +98,11 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
                               AI-readiness leaderboard page ranking the audited systems
                               (default output: leaderboard.html). Duplicate system ids
                               across files are refused.
+  gallery [<runDir>...] [--run <dir>] [--out <file>]
+                              everything the agents generated, side by side: rows per
+                              task, columns per context level and model, one column
+                              group per run; each cell inlines the files the agent
+                              changed (default: latest run, <runDir>/gallery.html)
   ci [--run <dir>] [--baseline <file>] [--fail-on regression|fail] [--freeze]
                               gate a run against a frozen baseline
   prune [--apply] [--run <dir>] [--older-than 7d] [--keep N] [--deep] [--force]
@@ -662,6 +669,7 @@ async function main(): Promise<number> {
       label: { type: 'string' },
       resume: { type: 'string' },
       'retry-errored': { type: 'boolean' },
+      hard: { type: 'boolean' },
       wait: { type: 'boolean' },
       run: { type: 'string' },
       baseline: { type: 'string' },
@@ -784,6 +792,7 @@ async function main(): Promise<number> {
           contexts: list(values.contexts) as ContextLevel[] | undefined,
           models: list(values.models),
           tasks: list(values.tasks),
+          hard: values.hard,
           reps: values.reps ? Number(values.reps) : undefined,
         },
         concurrency: values.concurrency ? Number(values.concurrency) : undefined,
@@ -865,6 +874,47 @@ async function main(): Promise<number> {
       const runs = positionals.map(loadResults);
       const out = values.out ?? join(positionals[0], 'compare.html');
       writeFileSync(out, renderCompareHtml(runs));
+      console.log(`wrote ${out}`);
+      return 0;
+    }
+
+    case 'gallery': {
+      const { latestRunDir } = await import('./run/runner.ts');
+      const { loadGalleryRun, renderGalleryHtml } = await import('./report/gallery.ts');
+      const { findChrome, screenshotCell } = await import('./report/screenshots.ts');
+      const runDirs = positionals.length > 0 ? positionals : [values.run ?? latestRunDir()].filter((d): d is string => !!d);
+      if (runDirs.length === 0) {
+        console.error('no run found — pass a run directory or --run <dir>');
+        return 2;
+      }
+      const runs = runDirs.map(loadGalleryRun);
+      try {
+        const { loadTasks } = await import('./tasks/load.ts');
+        const tasks = loadTasks(resolveTasksDir(loadBenchConfig(), values['tasks-dir']));
+        for (const run of runs) run.tasks = new Map(tasks.map((t) => [t.id, { title: t.title, prompt: t.prompt }]));
+      } catch {
+        // task text is decoration; the gallery renders without it
+      }
+      const chrome = findChrome();
+      if (!chrome) {
+        console.warn('[gallery] no Chrome/Chromium found (set CHROME_PATH) — rendering without screenshots');
+      } else {
+        const systemsConfig = loadSystems(resolveSystemsConfigPath(values.config));
+        const counts = { done: 0, cached: 0, failed: 0, 'no-workspace': 0 };
+        for (const run of runs) {
+          for (const rec of run.results.records) {
+            if (rec.status !== 'ok' || !rec.artifacts) continue;
+            const outcome = await screenshotCell({ runDir: run.runDir, rec, systemsConfig, chrome });
+            counts[outcome] += 1;
+            if (outcome === 'done' || outcome === 'failed') console.log(`[gallery] ${rec.artifacts.dir}: ${outcome}`);
+          }
+        }
+        console.log(
+          `[gallery] screenshots: ${counts.done} new, ${counts.cached} cached, ${counts.failed} failed, ${counts['no-workspace']} without a workspace (pruned)`,
+        );
+      }
+      const out = values.out ?? join(runDirs[0], 'gallery.html');
+      writeFileSync(out, renderGalleryHtml(runs, { outDir: dirname(resolve(out)) }));
       console.log(`wrote ${out}`);
       return 0;
     }

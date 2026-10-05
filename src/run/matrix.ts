@@ -8,6 +8,8 @@ export interface MatrixFilters {
   models?: string[];
   tasks?: string[];
   reps?: number;
+  /** --hard: let a "*" task list include tasks/hard/. */
+  hard?: boolean;
 }
 
 export interface ExpandedMatrix {
@@ -27,8 +29,9 @@ export function expandMatrix(
   const models = filters.models ?? profile.models;
   const reps = filters.reps ?? profile.reps;
 
+  const includeHard = filters.hard ?? profile.hard ?? false;
   const taskIds =
-    filters.tasks ?? (profile.tasks === '*' ? tasks.map((t) => t.id) : profile.tasks);
+    filters.tasks ?? (profile.tasks === '*' ? tasks.filter((t) => includeHard || !t.hard).map((t) => t.id) : profile.tasks);
   const taskById = new Map(tasks.map((t) => [t.id, t]));
 
   const cells: CellSpec[] = [];
