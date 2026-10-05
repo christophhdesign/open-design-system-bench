@@ -9,6 +9,12 @@ export interface AnalyzedFile {
   analysis: FileAnalysis;
 }
 
+/** A collected .css/.scss file. No AST: only tokenDiscipline reads these. */
+export interface StyleFile {
+  path: string;
+  source: string;
+}
+
 export interface GradeContext {
   system: SystemId;
   systemCfg: SystemConfig;
@@ -16,5 +22,6 @@ export interface GradeContext {
   tokens: SystemTokens;
   task: Task;
   files: AnalyzedFile[];
+  styles: StyleFile[];
   workspaceDir: string;
 }

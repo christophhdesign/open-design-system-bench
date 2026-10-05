@@ -417,6 +417,10 @@ async function invokeClaudeJudgeOnce(
     // Don't let the invoking machine's project/user MCP config (e.g. an
     // auth-gated server) affect a headless judge call.
     '--strict-mcp-config',
+    // --system-prompt replaces only the system prompt: CLAUDE.md files (the
+    // operator's and this repo's, the judge runs from here), auto-memory and
+    // hook output still arrive with the messages. The judge needs none of it.
+    '--safe-mode',
     '--system-prompt',
     systemPrompt,
     '--json-schema',

@@ -1,5 +1,7 @@
 import { spawn, execFile } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import type { AgentAdapter, AgentGenerateRequest, AgentGenerateResult } from '../types.ts';
 import { looksLikeUsageLimit } from './errors.ts';
 
@@ -7,6 +9,27 @@ import { looksLikeUsageLimit } from './errors.ts';
 // no web access: runs stay hermetic and cheap; graders do the verification.
 const ALLOWED_TOOLS = ['Read', 'Glob', 'Grep', 'LS', 'Edit', 'Write', 'MultiEdit', 'TodoWrite'];
 const DISALLOWED_TOOLS = ['WebSearch', 'WebFetch', 'Bash', 'Task', 'NotebookEdit'];
+
+/**
+ * Settings that confine a cell's instructions to its own workspace. Without
+ * them the agent also loads the operator's ~/.claude/CLAUDE.md and auto-memory,
+ * and, because runs/ sits inside this repo, the bench's own CLAUDE.md and
+ * AGENTS.md through Claude Code's walk up the parent directories. Every
+ * ancestor's *.md and .claude/ are excluded, so the workspace's CLAUDE.md
+ * (the agents-md level) is the only one left.
+ *
+ * Not --restricted, --safe-mode or --bare: all three also drop the workspace
+ * CLAUDE.md and .claude/skills, which collapses the agents-md and skill levels
+ * into bare (verified against a request-capturing mock endpoint).
+ */
+export function isolationSettings(workspaceDir: string): { autoMemoryEnabled: false; claudeMdExcludes: string[] } {
+  const claudeMdExcludes = [join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), '**')];
+  for (let dir = dirname(resolve(workspaceDir)); ; dir = dirname(dir)) {
+    claudeMdExcludes.push(join(dir, '*.md'), join(dir, '.claude', '**'));
+    if (dirname(dir) === dir) break;
+  }
+  return { autoMemoryEnabled: false, claudeMdExcludes };
+}
 
 interface StreamResultEvent {
   type?: string;
@@ -46,6 +69,12 @@ export const claudeCodeAdapter: AgentAdapter = {
       DISALLOWED_TOOLS.join(','),
       // Never load project/user MCP servers into a benchmark cell.
       '--strict-mcp-config',
+      // No user settings: the operator's skills, plugins, hooks and effort level
+      // stay out. The workspace's own .claude/skills still load (skill level).
+      '--setting-sources',
+      'project',
+      '--settings',
+      JSON.stringify(isolationSettings(req.workspaceDir)),
     ];
     for (const dir of req.addDirs) args.push('--add-dir', dir);
     if (req.appendSystemPrompt) args.push('--append-system-prompt', req.appendSystemPrompt);

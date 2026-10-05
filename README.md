@@ -50,7 +50,7 @@ Each cell produces an `EvalResult` (same `Gate`/score contract as `eval-harness/
 |---|---|---|---|
 | imports | 0.10 | only the system's package, react, and local files are imported | foreign UI lib → review/fail |
 | apiFidelity | 0.25 | no hallucinated components (imports ⊆ extracted catalog), no invented props, optional cross-system contamination sentinels (e.g. `iconStart` vs `iconLeading`, only relevant when benchmarking more than one system side by side) | hallucinated component → **fail** |
-| tokenDiscipline | 0.15 | no raw hex/rgb, no `bg-[#…]`/`w-[137px]` arbitrary values, no hardcoded inline-style colors | — |
+| tokenDiscipline | 0.15 | no raw hex/rgb, no `bg-[#…]`/`w-[137px]` arbitrary values, no hardcoded inline-style colors, no raw values in `.css`/`.scss` declarations | — |
 | a11yStatic | 0.10 | AST-based subset: accessible names on form controls / icon buttons, img-alt, positive tabindex, click-without-key, label association, valid `aria-*`, autofocus, anchor validity | — |
 | compile | 0.10 | `tsc --noEmit` against the fixture (aliased to the system's **source**) | error → **fail** |
 | judgment | 0.30 | per-task rubrics judged by a separate model (`claude -p --json-schema`, default haiku), blind to cell config | critical rubric fail → review |
@@ -115,6 +115,7 @@ there (or pass `--systems a,b`) to benchmark several at once.
 | `foundationsCss` | no | Path to the foundations CSS tokens are parsed from, or a list of paths when the system splits tokens across one file per category (read as one concatenated document); omit if none |
 | `catalogStrategy` | yes | `"docgen"` (extract via react-docgen-typescript), `"catalog-json"` (read a pre-built catalog file), or `"stencil"` (read the `docs.json` a Stencil build emits) |
 | `catalogFile` | `catalog-json` and `stencil` | Path to the pre-built catalog JSON, or to Stencil's `docs.json` |
+| `tsconfig` | no | Path to the tsconfig `docgen` compiles with. Defaults to the nearest `tsconfig.json` above `componentsSrc`; a solution-style one (Vite's `"files": []` plus `references`) is followed to the reference that includes `componentsSrc`, with a warning naming it |
 | `agentContext.agentsMd` | yes | Files copied in as `AGENTS.md`/`CLAUDE.md` at context level `agents-md` |
 | `agentContext.skillDirs` / `agentContext.extraDocs` | no | Skill bundles / extra reference docs injected at context level `skill` |
 | `contamination` | no | Cross-system sentinel props + typography casing — only meaningful with 2+ systems configured |
@@ -392,6 +393,12 @@ of shell exports: copy `.env.example` to `.env`, uncomment what you use, done. T
 automatically at startup, variables already set in your shell take precedence, and `.env` is
 gitignored so keys never reach the repo. `doctor` confirms when a `.env` was loaded and which
 provider keys it sees (never the values).
+
+Cells and the judge run isolated from your own Claude Code setup: no `~/.claude/CLAUDE.md`, user
+settings, skills, plugins, hooks or auto-memory, and none of this repo's own `CLAUDE.md` (cells run
+under `runs/`, inside the repo). A cell sees only the context its level put in its workspace. A key
+or gateway configured in `~/.claude/settings.json` (`env`, `apiKeyHelper`) therefore does not
+reach a run; use the environment variables below.
 
 **(a) Bill the claude CLI's own generation to an API key instead of a subscription window.**
 Export `ANTHROPIC_API_KEY` before running — the claude-code adapter's `spawn()` already inherits

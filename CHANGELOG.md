@@ -2,6 +2,19 @@
 
 What changed in open-design-system-bench, newest first. The project is GitHub-first (clone and run, no npm package), so dates are the record rather than published versions.
 
+## Unreleased
+
+Field feedback from running the audit and smoke tests against a production React system built with Vite.
+
+### Added
+
+- **`tsconfig` system field.** Points the `docgen` strategy at the tsconfig that actually compiles the components. Without it, a solution-style root `tsconfig.json` (Vite's default: `"files": []` plus `references`) is followed to the reference that includes `componentsSrc`, and a warning names the file used. Before, the root's empty options left path aliases unresolved and the catalog came back with almost no props, which on the reporting system cost 5.7 audit points.
+
+### Fixed
+
+- **Bare cells were not bare.** The agent loaded the operator's `~/.claude/CLAUDE.md`, user skills, plugins, hooks, effort level and auto-memory, and, since `runs/` sits inside this repo, the bench's own `CLAUDE.md` and `AGENTS.md`. Cells now pass `--setting-sources project` plus `claudeMdExcludes` for every directory above the workspace, so the workspace's own `CLAUDE.md` and `.claude/skills` are the only context left. `--restricted` was considered and rejected: it also drops those workspace files, which would make `agents-md` and `skill` identical to `bare`. The judge now runs with `--safe-mode` for the same reason. Results from earlier runs carried this context, so expect shifts when comparing against an older baseline.
+- **tokenDiscipline reads style sheets.** `.css` and `.scss` files the agent writes are collected and their declarations checked for raw hex/rgb colors and px/rem values, with comments, at-rules and selectors skipped, and `@apply` arbitrary values flagged. A system that keeps its styling in SCSS used to score 100 here whatever the stylesheet contained.
+
 ## 2026-09-07
 
 Web-component systems, Stencil catalogs, and several field-test fixes from pointing the harness at production libraries that are not React component trees.
