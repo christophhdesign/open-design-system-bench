@@ -36,8 +36,14 @@ examples/oss/repos/
 examples/
 marketing-docs/
 
+# Talk material (deck, landing page, demo script) and the preview config that
+# serves the deck. Not part of the shareable harness.
+presentation/
+.claude/launch.json
+
 # Internal planning and provenance. Not part of the shareable harness.
 ROADMAP.md
+ROADMAP.html
 product.md
 INTERNAL.md
 # One organization's model/pricing catalog, not a generic mechanism yet.

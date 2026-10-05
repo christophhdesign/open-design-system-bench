@@ -456,6 +456,48 @@ test('docgen extraction tolerates an unknown/future tsconfig compiler option ins
   assert.ok(names.includes('Button'), 'extraction proceeded past the unknown compiler option');
 });
 
+test('a solution-style root tsconfig (Vite: files [] + references) is followed to the reference covering componentsSrc', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-tsconfig-solution-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Button'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/solution-tsconfig' }));
+  // The node config is listed first on purpose: following references[0]
+  // blindly would land on a config that never compiles componentsSrc.
+  writeFileSync(
+    join(root, 'tsconfig.json'),
+    JSON.stringify({ files: [], references: [{ path: './tsconfig.node.json' }, { path: './tsconfig.app.json' }] }),
+  );
+  writeFileSync(join(root, 'tsconfig.node.json'), JSON.stringify({ compilerOptions: { composite: true }, include: ['vite.config.ts'] }));
+  writeFileSync(join(root, 'vite.config.ts'), 'export default {};\n');
+  // Only the app config knows the "@/" alias, so BaseProps resolves only under it.
+  writeFileSync(
+    join(root, 'tsconfig.app.json'),
+    JSON.stringify({
+      compilerOptions: { jsx: 'react-jsx', module: 'esnext', moduleResolution: 'bundler', paths: { '@/*': ['./src/*'] } },
+      include: ['src'],
+    }),
+  );
+  writeFileSync(join(src, 'index.ts'), "export * from './Button';\n");
+  writeFileSync(join(src, 'base.ts'), 'export interface BaseProps { label: string }\n');
+  writeFileSync(join(src, 'Button', 'index.ts'), "export * from './Button';\n");
+  writeFileSync(
+    join(src, 'Button', 'Button.tsx'),
+    "import type { BaseProps } from '@/base';\n" +
+      'export interface ButtonProps extends BaseProps { tone?: string }\n' +
+      'export const Button = (props: ButtonProps) => <button>{props.label}</button>;\n',
+  );
+  const buttonProps = async (cfg: SystemConfig) =>
+    (await extractDocgenCatalog('synthetic', cfg)).components
+      .flatMap((c) => c.exports)
+      .find((e) => e.displayName === 'Button')
+      ?.props.map((p) => p.name)
+      .sort();
+
+  assert.deepEqual(await buttonProps(makeConfig(root)), ['label', 'tone']);
+  // An explicit `tsconfig` is used as given: the node config has no alias, so the inherited prop is lost.
+  assert.deepEqual(await buttonProps({ ...makeConfig(root), tsconfig: 'tsconfig.node.json' }), ['tone']);
+});
+
 test('a genuinely malformed tsconfig.json still fails extraction with a clear, actionable message', async () => {
   const root = mkdtempSync(join(tmpdir(), 'odsys-extract-tsconfig-malformed-'));
   const src = join(root, 'src');

@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const COLLECTED_EXTENSIONS = new Set(['.ts', '.tsx', '.css', '.jsx', '.js']);
+const COLLECTED_EXTENSIONS = new Set(['.ts', '.tsx', '.css', '.scss', '.jsx', '.js']);
 
 export interface CollectResult {
   diffPatch: string;

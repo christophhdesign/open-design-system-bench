@@ -37,7 +37,7 @@ import { UsageLimitError, looksLikeUsageLimit } from '../agents/errors.ts';
 import { parseModelSpec } from '../providers/model-spec.ts';
 import { estimateApiCostUsd } from '../providers/pricing.ts';
 import { analyzeSource } from '../grade/ast.ts';
-import type { AnalyzedFile, GradeContext } from '../grade/context.ts';
+import type { AnalyzedFile, GradeContext, StyleFile } from '../grade/context.ts';
 import { runMechanical, composeResult } from '../grade/score.ts';
 import { judgeArtifact } from '../grade/judge.ts';
 import { buildRunResults } from '../report/aggregate.ts';
@@ -68,6 +68,7 @@ export interface RunOptions {
 }
 
 const GRADEABLE_EXT = /\.(tsx|ts|jsx|js)$/;
+const STYLE_EXT = /\.(css|scss)$/;
 
 /** Marks a manifest.cells entry as not-yet-completed — resume treats any skipReason with this prefix as pending. */
 const PAUSED_PREFIX = 'paused:';
@@ -106,21 +107,24 @@ function buildSystemPrompt(context: CellSpec['context']): string {
 }
 
 /** Read the graders' input files from a cell's collected files/ directory. */
-function readAnalyzedFiles(filesDir: string): AnalyzedFile[] {
-  if (!existsSync(filesDir)) return [];
-  const out: AnalyzedFile[] = [];
+function readCollectedFiles(filesDir: string): { files: AnalyzedFile[]; styles: StyleFile[] } {
+  const files: AnalyzedFile[] = [];
+  const styles: StyleFile[] = [];
+  if (!existsSync(filesDir)) return { files, styles };
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, entry.name);
       if (entry.isDirectory()) walk(p);
       else if (GRADEABLE_EXT.test(entry.name)) {
         const source = readFileSync(p, 'utf8');
-        out.push({ path: relative(filesDir, p), source, analysis: analyzeSource(p, source) });
+        files.push({ path: relative(filesDir, p), source, analysis: analyzeSource(p, source) });
+      } else if (STYLE_EXT.test(entry.name)) {
+        styles.push({ path: relative(filesDir, p), source: readFileSync(p, 'utf8') });
       }
     }
   };
   walk(filesDir);
-  return out;
+  return { files, styles };
 }
 
 /** compile grading needs the workspace's node_modules symlink; restore it for re-grades. */
@@ -143,7 +147,7 @@ export async function gradeCell(opts: {
 }): Promise<{ dimensions: DimensionResult[]; judgeRaw?: unknown }> {
   const { spec, task, assets } = opts;
   const workspaceDir = join(opts.cellDir, 'workspace');
-  const files = readAnalyzedFiles(join(opts.cellDir, 'files'));
+  const { files, styles } = readCollectedFiles(join(opts.cellDir, 'files'));
   const ctx: GradeContext = {
     system: spec.system,
     systemCfg: opts.systemsConfig[spec.system],
@@ -151,6 +155,7 @@ export async function gradeCell(opts: {
     tokens: assets.tokens,
     task,
     files,
+    styles,
     workspaceDir,
   };
 

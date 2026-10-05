@@ -535,19 +535,41 @@ export function splitOwnInherited(
 // resulting CompilerOptions to withCompilerOptions(), react-docgen-
 // typescript's lower-level entry point that skips its own config parsing
 // entirely.
-function loadCompilerOptions(tsconfigPath: string): ts.CompilerOptions {
-  const basePath = dirname(tsconfigPath);
+function parseTsconfig(tsconfigPath: string): ts.ParsedCommandLine {
   const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
   if (error) {
     const message = typeof error.messageText === 'string' ? error.messageText : ts.flattenDiagnosticMessageText(error.messageText, '\n');
     throw new Error(`cannot load tsconfig.json at ${tsconfigPath}: ${message}`);
   }
-
   // basePath + tsconfigPath match withCustomConfig's own call shape, so
   // `extends` chains resolve exactly the same way (parseJsonConfigFileContent
   // walks `extends` itself; a missing extends target surfaces as its own
   // hard error below, e.g. TS5083 "Cannot read file").
-  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, basePath, {}, tsconfigPath);
+  return ts.parseJsonConfigFileContent(config, ts.sys, dirname(tsconfigPath), {}, tsconfigPath);
+}
+
+function loadCompilerOptions(tsconfigPath: string, srcDir: string): ts.CompilerOptions {
+  let parsed = parseTsconfig(tsconfigPath);
+
+  // A solution-style tsconfig (Vite's default root: `"files": []` plus
+  // `references`) compiles nothing itself, so its options carry no jsx or
+  // paths and docgen resolves almost no prop types. Follow the reference that
+  // includes componentsSrc, else the first one. One hop only.
+  if (parsed.fileNames.length === 0 && parsed.projectReferences?.length) {
+    const refs = parsed.projectReferences
+      .map((ref) => ts.resolveProjectReferencePath(ref))
+      .filter((p) => existsSync(p))
+      .map((p) => ({ path: p, parsed: parseTsconfig(p) }));
+    const ref = refs.find((r) => r.parsed.fileNames.some((f) => isInsideRoot(srcDir, f))) ?? refs[0];
+    if (ref) {
+      console.warn(
+        `[extract] ${tsconfigPath} only lists project references; using ${ref.path}. ` +
+          'Set "tsconfig" in systems.config.json to choose another.',
+      );
+      tsconfigPath = ref.path;
+      parsed = ref.parsed;
+    }
+  }
 
   const ignoredOptionNames: string[] = [];
   const hardErrors: ts.Diagnostic[] = [];
@@ -637,8 +659,8 @@ export async function extractDocgenCatalog(system: SystemId, cfg: SystemConfig):
     packageOnlySubpathIndexFiles.push(target.path);
   }
 
-  const tsconfigPath = resolveTsconfigUpward(srcDir, cfg.root);
-  const compilerOptions = loadCompilerOptions(tsconfigPath);
+  const tsconfigPath = cfg.tsconfig ? join(cfg.root, cfg.tsconfig) : resolveTsconfigUpward(srcDir, cfg.root);
+  const compilerOptions = loadCompilerOptions(tsconfigPath, srcDir);
   const docgenParser = withCompilerOptions(compilerOptions, parserOptions);
 
   const components: SystemCatalog['components'] = [];

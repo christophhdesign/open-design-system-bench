@@ -145,6 +145,13 @@ source and is not part of the shipped repo.
   requires a byte match, and rejects any figure in agent prose that does not trace to computed data
   or to a declared `citedFigures` entry. What a report *concludes* is never constrained: coverage
   and grounding are enforced, conclusions are not. Do not add gates that dictate findings.
+- **A cell sees only its own workspace.** The claude-code adapter passes `--setting-sources project`
+  and `claudeMdExcludes` for every ancestor's `*.md` and `.claude/` (`isolationSettings` in
+  `src/agents/claude-code.ts`), because `runs/` sits inside this repo and Claude Code walks up the
+  parent directories for CLAUDE.md. Do not swap this for `--restricted`, `--safe-mode` or `--bare`:
+  all three also drop the workspace `CLAUDE.md` and `.claude/skills`, which is how the `agents-md`
+  and `skill` levels deliver context, so every level would silently measure `bare`. The judge needs
+  no context at all and does use `--safe-mode`.
 - **Finding ids name a cause and stay stable across reports.** That is the whole mechanism by which
   a system's evolution becomes visible. `report --stats --since <previous report>` exists to carry
   them forward; a renamed id silently breaks history.

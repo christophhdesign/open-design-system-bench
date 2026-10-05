@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import type { DimensionResult, SystemCatalog, SystemConfig, SystemTokens, Task } from '../types.ts';
 import { analyzeSource } from './ast.ts';
-import type { AnalyzedFile, GradeContext } from './context.ts';
+import type { AnalyzedFile, GradeContext, StyleFile } from './context.ts';
 import { gradeImports } from './mechanical/imports.ts';
 import { gradeApiFidelity } from './mechanical/api-fidelity.ts';
 import { gradeTokenDiscipline } from './mechanical/token-discipline.ts';
@@ -68,7 +68,7 @@ function file(path: string, source: string): AnalyzedFile {
   return { path, source, analysis: analyzeSource(path, source) };
 }
 
-function makeCtx(files: AnalyzedFile[]): GradeContext {
+function makeCtx(files: AnalyzedFile[], styles: StyleFile[] = []): GradeContext {
   return {
     system: 'systemB',
     systemCfg,
@@ -76,6 +76,7 @@ function makeCtx(files: AnalyzedFile[]): GradeContext {
     tokens,
     task,
     files,
+    styles,
     workspaceDir: '/fake/workspace',
   };
 }
@@ -173,6 +174,37 @@ test('gradeTokenDiscipline flags a raw hex color in a Tailwind arbitrary value',
   const result = gradeTokenDiscipline(ctx);
   assert.notEqual(result.gate, 'pass');
   assert.ok(result.diffs.some((d) => d.message.includes('#ff0000')));
+});
+
+test('gradeTokenDiscipline scans .css/.scss declarations, skipping comments, at-rules and selectors', () => {
+  const scss = [
+    '/* color: #ff0000 in a block comment */',
+    '// padding: 12px in a line comment',
+    "@use 'tokens';",
+    '@media (min-width: 768px) {',
+    '  .card:not(#abc) { color: #ff0000; padding: var(--ds-space-4); }',
+    '  .card { margin: 12px; }',
+    '  .ok { gap: $ds-space-2; }',
+    '}',
+    '.x {',
+    '  @apply bg-[#00ff00] p-4;',
+    '}',
+  ].join('\n');
+  const result = gradeTokenDiscipline(makeCtx([], [{ path: 'src/task/card.module.scss', source: scss }]));
+  assert.deepEqual(
+    result.diffs.map((d) => d.message),
+    [
+      "Declaration color: '#ff0000' in src/task/card.module.scss:5 bypasses design tokens",
+      "Declaration margin: '12px' in src/task/card.module.scss:6 bypasses design tokens",
+      "Arbitrary Tailwind value '[#00ff00]' in src/task/card.module.scss:10 bypasses design tokens",
+    ],
+  );
+  assert.equal(result.score, 70);
+  assert.equal(result.gate, 'review');
+
+  const clean = gradeTokenDiscipline(makeCtx([], [{ path: 'src/task/a.css', source: '.a { color: var(--ds-fg); gap: 0; }\n' }]));
+  assert.equal(clean.gate, 'pass');
+  assert.equal(clean.diffs.length, 0);
 });
 
 test('gradeTokenDiscipline leaves ordinary Tailwind utility classes alone', () => {
@@ -460,7 +492,7 @@ const ceCfg: SystemConfig = {
 };
 
 function makeCeCtx(files: AnalyzedFile[]): GradeContext {
-  return { system: 'systemCE', systemCfg: ceCfg, catalog: ceCatalog, tokens, task, files, workspaceDir: '/fake/workspace' };
+  return { system: 'systemCE', systemCfg: ceCfg, catalog: ceCatalog, tokens, task, files, styles: [], workspaceDir: '/fake/workspace' };
 }
 
 test('gradeApiFidelity counts import-less custom-element tags as design-system usage', () => {

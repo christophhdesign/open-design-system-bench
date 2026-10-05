@@ -61,6 +61,14 @@ export interface SystemConfig {
    * the docs.json emitted by Stencil's `docs-json` output target).
    */
   catalogFile?: string;
+  /**
+   * Path (relative to root) to the tsconfig the 'docgen' strategy compiles
+   * with. Omit to use the nearest tsconfig.json above componentsSrc; when that
+   * file is solution-style (`"files": []` plus `references`, the Vite default)
+   * the reference that includes componentsSrc is used instead, with a warning.
+   * Set this when neither guess is the config that compiles the components.
+   */
+  tsconfig?: string;
   agentContext: {
     agentsMd: string[]; // files copied at context level "agents-md" (relative to root)
     skillDirs?: string[]; // skill bundles copied into .claude/skills/ at context level "skill"

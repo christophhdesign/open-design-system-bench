@@ -129,7 +129,9 @@ export async function loadCatalogForAudit(
       // Monorepos keep tsconfig.json at the package or repo root rather than
       // exactly one level above componentsSrc — search upward through root
       // so partial credit doesn't zero out on those layouts.
-      tsconfigExists: findTsconfigUpward(srcDir, cfg.root) !== undefined,
+      tsconfigExists: cfg.tsconfig
+        ? existsSync(join(cfg.root, cfg.tsconfig))
+        : findTsconfigUpward(srcDir, cfg.root) !== undefined,
       tsxComponentCount: countTsxComponentFiles(srcDir),
     },
   };

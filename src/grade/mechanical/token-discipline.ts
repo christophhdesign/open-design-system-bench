@@ -1,7 +1,8 @@
 // Dimension: tokenDiscipline (weight .15)
 // Flags raw hex/rgb colors and raw px/rem dimensions that bypass the design
 // system's tokens — in className strings (including Tailwind arbitrary-value
-// syntax) and in inline style object literals. Deliberately does NOT try to
+// syntax), in inline style object literals, and in the declarations of any
+// .css/.scss file the agent wrote. Deliberately does NOT try to
 // validate every utility class against the token list; core Tailwind spacing
 // utilities (p-4, gap-2, ...) are legitimate and out of scope here.
 
@@ -93,17 +94,45 @@ function findClassNameViolations(value: string, line: number, filePath: string):
   return findings;
 }
 
-function findInlineStyleViolation(prop: string, value: string, line: number, filePath: string): Finding | undefined {
+function findInlineStyleViolation(prop: string, value: string, line: number, filePath: string, label = 'Inline style'): Finding | undefined {
   const kind = classifyText(value);
   if (!kind) return undefined;
   return {
     kind,
-    message: `Inline style ${prop}: '${value}' in ${filePath}:${line} bypasses design tokens`,
+    message: `${label} ${prop}: '${value}' in ${filePath}:${line} bypasses design tokens`,
     fix:
       kind === 'color'
         ? `Use a design system color token instead of a raw value for '${prop}'.`
         : `Use a design system spacing/sizing token instead of a raw value for '${prop}'.`,
   };
+}
+
+const DECLARATION_RE = /([$\w-]+)\s*:\s*([^;{}]+)/g;
+
+// ponytail: a line scan, not a CSS parser. A value continued onto a second
+// line is checked on its first line only; postcss if that ever matters.
+function findStyleSheetViolations(source: string, filePath: string): Finding[] {
+  const findings: Finding[] = [];
+  // Blank out block comments but keep their newlines so line numbers hold.
+  const lines = source.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, ' ')).split('\n');
+  lines.forEach((raw, i) => {
+    const line = raw.replace(/(^|\s)\/\/.*$/, '$1'); // scss line comment
+    const trimmed = line.trim();
+    if (trimmed.startsWith('@apply ')) {
+      findings.push(...findClassNameViolations(trimmed.slice(7), i + 1, filePath));
+      return;
+    }
+    // Other at-rules carry no declarations, and a media query breakpoint
+    // cannot take a custom property, so it is not a token bypass.
+    if (trimmed.startsWith('@')) return;
+    // Only what follows the last '{', so a selector such as `:not(#abc)` is not read as a value.
+    const body = line.slice(line.lastIndexOf('{') + 1);
+    for (const [, prop, value] of body.matchAll(DECLARATION_RE)) {
+      const finding = findInlineStyleViolation(prop, value.trim(), i + 1, filePath, 'Declaration');
+      if (finding) findings.push(finding);
+    }
+  });
+  return findings;
 }
 
 export function gradeTokenDiscipline(ctx: GradeContext): DimensionResult {
@@ -112,26 +141,27 @@ export function gradeTokenDiscipline(ctx: GradeContext): DimensionResult {
   let anyColor = false;
   const allowHexIn = ctx.task.mechanicalOverrides?.allowHexIn ?? [];
 
+  const record = (finding: Finding, hexAllowed: boolean) => {
+    if (hexAllowed && finding.kind === 'color') return;
+    violations += 1;
+    if (finding.kind === 'color') anyColor = true;
+    diffs.push({ dimension: 'tokenDiscipline', message: finding.message, fix: finding.fix });
+  };
+
   for (const file of ctx.files) {
     const hexAllowed = allowHexIn.length > 0 && matchesAnyGlob(file.path, allowHexIn);
-
     for (const cls of file.analysis.classNameLiterals) {
-      for (const finding of findClassNameViolations(cls.value, cls.line, file.path)) {
-        if (hexAllowed && finding.kind === 'color') continue;
-        violations += 1;
-        if (finding.kind === 'color') anyColor = true;
-        diffs.push({ dimension: 'tokenDiscipline', message: finding.message, fix: finding.fix });
-      }
+      for (const finding of findClassNameViolations(cls.value, cls.line, file.path)) record(finding, hexAllowed);
     }
-
     for (const style of file.analysis.inlineStyles) {
       const finding = findInlineStyleViolation(style.prop, style.value, style.line, file.path);
-      if (!finding) continue;
-      if (hexAllowed && finding.kind === 'color') continue;
-      violations += 1;
-      if (finding.kind === 'color') anyColor = true;
-      diffs.push({ dimension: 'tokenDiscipline', message: finding.message, fix: finding.fix });
+      if (finding) record(finding, hexAllowed);
     }
+  }
+
+  for (const sheet of ctx.styles) {
+    const hexAllowed = allowHexIn.length > 0 && matchesAnyGlob(sheet.path, allowHexIn);
+    for (const finding of findStyleSheetViolations(sheet.source, sheet.path)) record(finding, hexAllowed);
   }
 
   const score = Math.max(0, 100 - violations * 10);
