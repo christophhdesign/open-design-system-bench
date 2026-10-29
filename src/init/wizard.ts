@@ -18,7 +18,8 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import { foundationsCssPaths, paths } from '../config.ts';
 import { collectBarrelExports } from '../extract/normalize.ts';
-import type { SystemConfig, SystemId, SystemsConfig } from '../types.ts';
+import { leakAllowlistFor, leakedSymbols, loadTasks } from '../tasks/load.ts';
+import type { SystemConfig, SystemId, SystemsConfig, Task } from '../types.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -242,6 +243,7 @@ export async function runInit(opts: RunInitOptions = {}): Promise<RunInitResult>
 
   const checks = doctorGradeChecks(answers, systemConfig);
   const tasksResult = scaffoldStarterTasks(cwd);
+  checks.push(...leakAllowlistProposal(answers.systemId, systemConfig, join(cwd, 'tasks')));
 
   const summary = buildSummary({
     configPath,
@@ -587,6 +589,48 @@ function doctorGradeChecks(answers: InitAnswers, cfg: SystemConfig): string[] {
   }
 
   return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Leak allowlist proposal
+// ---------------------------------------------------------------------------
+
+/** Exports the task prompts name, with the tasks that name them. Pure, for tests. */
+export function proposeLeakAllowlist(tasks: Task[], exportNames: string[], cfg?: Pick<SystemConfig, 'leakAllowlist'>): Array<{ symbol: string; taskIds: string[] }> {
+  const bySymbol = new Map<string, string[]>();
+  for (const task of tasks) {
+    for (const symbol of leakedSymbols(task.prompt, exportNames, leakAllowlistFor(cfg))) {
+      bySymbol.set(symbol, [...(bySymbol.get(symbol) ?? []), task.id]);
+    }
+  }
+  return [...bySymbol].map(([symbol, taskIds]) => ({ symbol, taskIds })).sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
+/**
+ * Words this system exports that the task prompts already use, found from the
+ * barrel before any extract. Proposed, never written: an entry is right only
+ * when the prompt means the ordinary word, and that is the operator's call.
+ * ponytail: root barrel only, so a name that reaches the catalog through a
+ * package.json subpath export (Chakra's `system`), or any catalog-json or
+ * stencil system, is caught after extract by validate-tasks, which names the
+ * same fix.
+ */
+function leakAllowlistProposal(systemId: string, cfg: SystemConfig, tasksDir: string): string[] {
+  if (cfg.catalogStrategy !== 'docgen' || !existsSync(tasksDir)) return [];
+  const entry = resolveBarrelEntry(cfg.root, cfg.componentsSrc);
+  if (!entry) return [];
+  let proposal: Array<{ symbol: string; taskIds: string[] }>;
+  try {
+    proposal = proposeLeakAllowlist(loadTasks(tasksDir), [...new Set(collectBarrelExports(entry).map((e) => e.name))], cfg);
+  } catch {
+    return [];
+  }
+  if (!proposal.length) return [];
+  return [
+    `  note the task prompts use words ${systemId} exports: ${proposal.map((p) => `${p.symbol} (${p.taskIds.join(', ')})`).join('; ')}`,
+    `       validate-tasks fails on each until it is reworded or, where the prompt means the ordinary word, listed:`,
+    `       "leakAllowlist": ${JSON.stringify(proposal.map((p) => p.symbol))}`,
+  ];
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import ts from 'typescript';
 import { PKG_ROOT, paths } from '../config.ts';
 import type { ContextLevel, SystemCatalog, SystemConfig, SystemId } from '../types.ts';
 
@@ -53,6 +54,65 @@ const FOUNDATIONS_CSS_PLACEHOLDER = '__FOUNDATIONS_CSS__';
 // corresponding import is dropped from main.tsx by applyFoundationsCssPlaceholder,
 // so this is a harmless, self-explaining dead mapping rather than a real path.
 const FOUNDATIONS_CSS_FALLBACK = 'foundations-css-not-configured.css';
+// A tsconfig "paths" entry the generic source template carries first in its
+// paths block; substitutePlaceholders replaces the whole line with the
+// system's own package aliases (systemTsPaths), or drops it when there are none.
+const SYSTEM_TS_PATHS_LINE = /^([ \t]*)"__SYSTEM_TS_PATHS__": \[\],[ \t]*\n/m;
+
+function readTsconfigOptions(tsconfigPath: string): ts.CompilerOptions | undefined {
+  const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+  if (error) return undefined;
+  return ts.parseJsonConfigFileContent(config, ts.sys, dirname(tsconfigPath), {}, tsconfigPath).options;
+}
+
+/**
+ * A scoped package alias (`@mantine/*`), the shape monorepo siblings take. A
+ * catch-all ("*"), an app-local alias ("@/*", "~/*", "#x") or a bare one
+ * (Chakra's "compositions/*", its example app) would let the fixture resolve
+ * names the published package does not have.
+ */
+function isPackageAlias(key: string): boolean {
+  return /^@[^/]+\/./.test(key);
+}
+
+/**
+ * The package aliases a system's own tsconfigs declare, from componentsSrc up
+ * to the system root (plus SystemConfig.tsconfig), with absolute targets.
+ * Monorepo packages import their siblings by name (`@mantine/hooks`), and a
+ * sibling's workspace link points at built types a source checkout does not
+ * have; the system's own `paths` map those names to source instead. Without
+ * them the fixture compiles the system's source with every sibling unresolved
+ * and the compile dimension fails on errors that are not the agent's (every
+ * Mantine cell, measured 2026-10-27). Nearer tsconfigs win.
+ */
+export function systemTsPaths(cfg: Pick<SystemConfig, 'root' | 'componentsSrc' | 'tsconfig'>): Record<string, string[]> {
+  const root = resolve(cfg.root);
+  const configs: string[] = [];
+  if (cfg.tsconfig) configs.push(join(root, cfg.tsconfig));
+  for (let dir = join(root, cfg.componentsSrc); ; dir = dirname(dir)) {
+    if (existsSync(join(dir, 'tsconfig.json'))) configs.push(join(dir, 'tsconfig.json'));
+    if (dir === root || dirname(dir) === dir) break;
+  }
+  const out: Record<string, string[]> = {};
+  for (const tsconfigPath of configs) {
+    const options = readTsconfigOptions(tsconfigPath);
+    if (!options?.paths) continue;
+    // Without baseUrl, TS resolves paths against the declaring tsconfig's
+    // directory, which parseJsonConfigFileContent records as pathsBasePath.
+    const base = options.baseUrl ?? (options.pathsBasePath as string | undefined) ?? dirname(tsconfigPath);
+    for (const [key, targets] of Object.entries(options.paths)) {
+      if (key in out || !isPackageAlias(key)) continue;
+      out[key] = targets.map((t) => resolve(base, t));
+    }
+  }
+  return out;
+}
+
+function renderSystemTsPaths(cfg: SystemConfig, indent: string): string {
+  return Object.entries(systemTsPaths(cfg))
+    .map(([key, targets]) => `${indent}${JSON.stringify(key)}: ${JSON.stringify(targets)},\n`)
+    .join('');
+}
 
 /**
  * The one foundations stylesheet this template can alias, or undefined when
@@ -406,13 +466,28 @@ export interface ProvisionOptions {
   catalog: SystemCatalog;
 }
 
-/** Copies a fixture template dir into destDir, excluding any node_modules. Exported for tests. */
+/**
+ * The one README every workspace gets, whatever the fixture. The agent's
+ * system prompt points at README.md, so a template that ships its own (the
+ * npm template once said the system's package was installed) or none (the
+ * source template) gives cells different guidance depending on how the
+ * package is consumed, and a source-against-npm comparison measures the
+ * README instead. It says where to work and nothing about the design system:
+ * that is what the context levels are for.
+ */
+export const WORKSPACE_README = `# Task workspace
+
+A Vite, React and TypeScript app. Implement the requested feature in \`src/task/\`, starting from \`src/task/index.tsx\`. Do not modify files outside \`src/\`.
+`;
+
+/** Copies a fixture template dir into destDir, excluding any node_modules, and writes the shared README. Exported for tests. */
 export function copyTemplate(templateDirPath: string, destDir: string): void {
   mkdirSync(destDir, { recursive: true });
   cpSync(templateDirPath, destDir, {
     recursive: true,
     filter: (src) => !src.split(sep).includes('node_modules'),
   });
+  writeFileSync(join(destDir, 'README.md'), WORKSPACE_README);
 }
 
 /**
@@ -426,6 +501,7 @@ export function substitutePlaceholders(destDir: string, cfg: SystemConfig): void
     const filePath = join(destDir, rel);
     if (!existsSync(filePath)) continue;
     const next = readFileSync(filePath, 'utf8')
+      .replace(SYSTEM_TS_PATHS_LINE, (_line, indent: string) => renderSystemTsPaths(cfg, indent))
       .split(SYSTEM_ROOT_PLACEHOLDER).join(cfg.root)
       .split(COMPONENTS_PKG_PLACEHOLDER).join(cfg.componentsPkg)
       .split(FOUNDATIONS_PKG_PLACEHOLDER).join(cfg.foundationsPkg)
@@ -703,6 +779,19 @@ export async function provisionWorkspace(opts: ProvisionOptions): Promise<void> 
   linkNodeModules(srcTemplateDir, destDir);
   injectContext(systemCfg, context, destDir);
   await commitBaseline(destDir);
+}
+
+/**
+ * Rewrites a stored workspace's tsconfig.json from the current template, so
+ * `grade` compiles stored code under the current fixture rules (the system
+ * path aliases above, say) instead of whatever the template said when the
+ * cell ran. The agent never wrote tsconfig.json: it is outside src/.
+ */
+export function refreshWorkspaceTsconfig(workspaceDir: string, system: SystemId, cfg: SystemConfig): void {
+  const template = join(templateDir(system, cfg), 'tsconfig.json');
+  if (!existsSync(workspaceDir) || !existsSync(template)) return;
+  writeFileSync(join(workspaceDir, 'tsconfig.json'), readFileSync(template, 'utf8'));
+  substitutePlaceholders(workspaceDir, cfg);
 }
 
 /** Restore the node_modules symlink if pruneWorkspace already removed it. Returns a cleanup. */

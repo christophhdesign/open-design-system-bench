@@ -51,8 +51,14 @@ Each cell produces an `EvalResult` (same `Gate`/score contract as `eval-harness/
 | apiFidelity | 0.25 | no hallucinated components (imports ⊆ extracted catalog), no invented props, optional cross-system contamination sentinels (e.g. `iconStart` vs `iconLeading`, only relevant when benchmarking more than one system side by side) | hallucinated component → **fail** |
 | tokenDiscipline | 0.15 | no raw hex/rgb, no `bg-[#…]`/`w-[137px]` arbitrary values, no hardcoded inline-style colors, no raw values in `.css`/`.scss` declarations | — |
 | a11yStatic | 0.10 | AST-based subset: accessible names on form controls / icon buttons, img-alt, positive tabindex, click-without-key, label association, valid `aria-*`, autofocus, anchor validity | — |
-| compile | 0.10 | `tsc --noEmit` against the fixture (aliased to the system's **source**) | error → **fail** |
+| compile | 0.10 | `tsc --noEmit` against the fixture (aliased to the system's **source**, plus the scoped package aliases the system's own tsconfigs declare, so monorepo siblings resolve to source too). Errors inside the system's own files are reported as setup and never gate | error in the agent's files → **fail** |
 | judgment | 0.30 | per-task rubrics judged by a separate model (`claude -p --json-schema`, default haiku), blind to cell config | critical rubric fail → review |
+
+Two rules keep the judge honest. A rubric that presumes a component the system does not have
+(`presumes: text-input` in the task YAML) is **withheld** for that system: it is not sent to the
+judge, its weight goes to the other rubrics, and report.html says why. And every rationale that
+says a component is imported or used is **checked against the diff**: a claim the diff
+contradicts caps the cell at review and is shown with the rationale it came from.
 
 Ground truth is **extracted, never hand-written**: `catalogStrategy: "docgen"` runs
 react-docgen-typescript over your `componentsSrc` (public API = root barrel ∪ package.json subpath
@@ -128,6 +134,8 @@ there (or pass `--systems a,b`) to benchmark several at once.
 | `cssEntry` | no | Import specifier for the system's stylesheet, e.g. `"@acme/ui/styles.css"`; optional, `npm` mode only |
 | `fixturePins` | no | Extra npm specs installed alongside `packageSpec`, for peer-dependency conflicts (a library still on React 18 needs `["react@^18.3.1", …]` against the template's React 19) |
 | `a11y` | no | Your accessible-name vocabulary for the a11yStatic grader (`controls`, `iconOnly`, `labels`, `formContext`, `placeholderNamed`). Merged with conventional defaults, so declare only what differs |
+| `leakAllowlist` | no | Words this system exports that the task prompts use as ordinary English (`["For", "Show"]`), skipped by the prompt-leak lint for this system only. `validate-tasks` names the word to add on each failure and `init` proposes entries from the barrel; neither adds one for you |
+| `affordances` | no | Export names that provide an affordance a rubric can presume, e.g. `{ "text-input": ["TextEntry"] }`. Merged with conventional defaults (`Input`, `TextInput`, `TextField`, ...); a rubric whose affordance matches no export is withheld for this system, and `validate-tasks` lists it |
 
 ## npm-consume mode
 
@@ -140,6 +148,11 @@ there: the template's own deps (react, vite, …), then `packageSpec` (or `compo
 as it does for `"source"` mode — imports resolve through real `node_modules`, no
 `__SYSTEM_ROOT__` substitution needed. If `cssEntry` is set, `src/main.tsx` imports it; if omitted,
 the placeholder import line is removed rather than left dangling.
+
+Both modes show the agent the same text: every workspace gets one shared `README.md` (where to
+work, nothing about the design system) and the same `src/task/index.tsx` stub, and a template's own
+README is replaced. A source-against-npm comparison therefore measures how the package is
+consumed, not which fixture said more about it. A test holds the three generic fixtures to that.
 
 If the package's peer dependencies conflict with the template's React version, set
 `fixturePins` to extra install specs resolved together with the package. A library still on
@@ -219,7 +232,8 @@ npx tsx src/cli.ts audit --run runs/<id>              # adds the four behavioral
 
 Without `--run` the composite is surface-only and labeled as such: static checks are a
 weaker kind of evidence than measured agent behavior, and the report never blurs the two.
-With a run, four behavioral sub-scores join the composite: Lift (guided minus bare score),
+With a run, four behavioral sub-scores join the composite: Lift (the mean guided-minus-bare delta
+over matched pairs of the same system, model and task; unpaired cells are counted and left out),
 Ceiling (guided quality and pass rate), Engagement (share of cells that actually used the
 system), and Vocabulary (whether hallucinated names at least follow convention).
 
@@ -228,6 +242,10 @@ system), and Vocabulary (whether hallucinated names at least follow convention).
 ```bash
 npx tsx src/cli.ts leaderboard audit-a.json audit-b.json --out leaderboard.html
 ```
+
+Systems are ranked only against systems measured on the same evidence: static-only, full-run
+and partial-run composites (grouped by the sub-scores they have) each get their own table, and a
+rank never crosses tables.
 
 
 ## Profiles: pick the run for the question
@@ -264,8 +282,9 @@ Every run lands in `runs/<timestamp>-<label>/` with `manifest.json`, `results.js
 Useful during iteration (no agent re-runs — they re-score stored diffs):
 
 ```bash
-npx tsx src/cli.ts grade --run runs/<id>     # re-run mechanical graders only
+npx tsx src/cli.ts grade --run runs/<id>     # re-run mechanical graders, re-score stored verdicts
 npx tsx src/cli.ts judge --run runs/<id> --judge-model sonnet --judge-samples 3
+npx tsx src/cli.ts judge --run runs/<id> --missing  # judge only the cells with no verdict yet
 npx tsx src/cli.ts compare runs/<a> runs/<b> # side-by-side deltas (e.g. before/after a docs change)
 npx tsx src/cli.ts gallery runs/<a> [runs/<b>] # UI gallery: a screenshot of what every cell rendered,
                                              # rows per context level, cards per rep, task picker
@@ -339,8 +358,13 @@ npx tsx src/cli.ts ci --run runs/<newer>                # exit 1 on >5pt drop or
 npx tsx src/cli.ts ci --run runs/<id> --fail-on fail    # exit 1 on any hard-gate fail
 ```
 
-Exit codes: `0` ok · `1` fail/regression · `2` usage/config error · `3` inconclusive (>20% of
-cells errored — a green gate never means "we didn't measure"). Wire `extract && validate-tasks
+Exit codes: `0` ok · `1` fail/regression · `2` usage/config error · `3` inconclusive: more than
+20% of cells errored, the run is paused or empty, or, against a baseline, fewer than
+`ci.minCoverage` (default 80%) of the comparable cells were measured. A green gate never means
+"we didn't measure". `ci` prints matched, unmeasured and new cells; only matched, measured cells
+are compared, and a cell is measured only when it and its baseline cell were scored on the same
+basis (both judged, or neither), since a mechanical-only score runs high. A `small` run against a
+`full` baseline compares just its own cells. Wire `extract && validate-tasks
 && run --profile smoke && ci` into your design system's CI to catch stale mappings the way the
 article describes (a renamed prop should fail the suite, not ship).
 
@@ -397,7 +421,13 @@ A `full` run is *N* systems × 3 contexts × 10 tasks × 3 reps generations (min
 inapplicable tasks) + as many judge calls — 90 generations for the default single-system template,
 180 with two systems configured. At 2–5 min per generation, expect hours; the default
 concurrency is 2 (`--concurrency`). Use `--tasks`, `--systems`, `--contexts`, `--reps 1` to scope
-partial runs; `run --no-judge` skips judging (add it later via `judge --run`).
+partial runs; `run --no-judge` skips judging (add it later via `judge --run <dir> --missing`).
+
+The judge carries most of the variance in an agentic score, so the `full` profile takes three
+judge samples per cell (majority vote per rubric, mean score); any profile can set
+`"judgeSamples"`, and `--judge-samples` overrides it. report.html prints the judge and how many
+ok cells it covered, a cell whose judge call failed keeps its generation and is marked missing
+rather than errored, and `compare` warns when two runs were judged differently.
 
 ## Providers & bring-your-own-key
 

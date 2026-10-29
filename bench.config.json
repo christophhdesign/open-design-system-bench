@@ -32,7 +32,8 @@
       "contexts": ["bare", "agents-md", "skill"],
       "models": ["sonnet"],
       "tasks": "*",
-      "reps": 3
+      "reps": 3,
+      "judgeSamples": 3
     },
     "hard": {
       "systems": ["my-system"],
@@ -60,6 +61,7 @@
   },
   "ci": {
     "maxScoreDrop": 5,
-    "maxErroredCellRatio": 0.2
+    "maxErroredCellRatio": 0.2,
+    "minCoverage": 0.8
   }
 }

@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DesignArena research</title>
+<meta name="description" content="What DesignArena measures and how, its 31 voted categories as of 2026-10-27, and what open-design-system-bench differs in, lacks, and should borrow.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Pixel&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@1,6..72,400&display=swap">
+<style>
+/* Same palette, faces and layout primitives as docs/reports/integrity/index.html, dark first. */
+:root{
+  --bg:#0A0D16; --surface:#10151F; --surface-2:#161D2C;
+  --border:#232B3F; --border-strong:#34405C;
+  --ink:#E8ECF7; --ink-2:#C3CADC; --muted:#8B95B3; --faint:#5C6685;
+  --accent:#6C8CFF; --accent-ink:#9FB0FF; --accent-wash:rgba(108,140,255,.13);
+  --pass:#3DD68C; --pass-wash:rgba(61,214,140,.12);
+  --review:#F5C542; --review-wash:rgba(245,197,66,.12);
+  --bad:#F87171; --bad-wash:rgba(248,113,113,.12);
+  --serif:"Newsreader",Georgia,"Iowan Old Style","Times New Roman",serif;
+  --sans:"Geist",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:"Geist Mono","SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --pixel:"Geist Pixel","Geist Mono","SF Mono",Menlo,monospace;
+  --t-h1:clamp(2rem,1.4rem + 2.6vw,3.2rem);
+  --t-h2:clamp(1.35rem,1.15rem + .8vw,1.75rem);
+  --t-body:1.0rem;
+  --t-small:.875rem;
+  --t-micro:.72rem;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#F4F6FB; --surface:#FFFFFF; --surface-2:#EDF0F7;
+    --border:#DCE1EE; --border-strong:#C3CBDD;
+    --ink:#0E1322; --ink-2:#2E3650; --muted:#5A6480; --faint:#8A93AD;
+    --accent:#3A5BDB; --accent-ink:#3552C8; --accent-wash:rgba(58,91,219,.1);
+    --pass:#0B7A4A; --pass-wash:rgba(18,146,90,.1);
+    --review:#A87400; --review-wash:rgba(168,116,0,.1);
+    --bad:#C2410C; --bad-wash:rgba(194,65,12,.1);
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#F4F6FB; --surface:#FFFFFF; --surface-2:#EDF0F7;
+  --border:#DCE1EE; --border-strong:#C3CBDD;
+  --ink:#0E1322; --ink-2:#2E3650; --muted:#5A6480; --faint:#8A93AD;
+  --accent:#3A5BDB; --accent-ink:#3552C8; --accent-wash:rgba(58,91,219,.1);
+  --pass:#0B7A4A; --pass-wash:rgba(18,146,90,.1);
+  --review:#A87400; --review-wash:rgba(168,116,0,.1);
+  --bad:#C2410C; --bad-wash:rgba(194,65,12,.1);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:var(--t-body);line-height:1.6}
+.page{max-width:1000px;margin:0 auto;padding-inline:24px;padding-block:56px 96px}
+@media (max-width:520px){.page{padding-inline:16px;padding-block:32px 64px}}
+
+h1,h2{font-family:var(--pixel);font-weight:400;line-height:1.1;margin:0;text-wrap:balance;letter-spacing:-.01em}
+h1{font-size:var(--t-h1)}
+h2{font-size:var(--t-h2)}
+h3{font-family:var(--sans);font-size:1.08rem;font-weight:600;line-height:1.3;margin:0;text-wrap:balance}
+p{margin:0;max-width:68ch}
+a{color:var(--accent-ink);text-underline-offset:2px}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);border:1px solid var(--border);padding:0 5px;border-radius:4px;overflow-wrap:anywhere}
+
+.eyebrow{font-family:var(--mono);font-size:var(--t-micro);letter-spacing:.12em;text-transform:uppercase;color:var(--accent-ink)}
+.hero{display:grid;gap:16px}
+.lede{font-size:1.12rem;color:var(--ink-2);max-width:64ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px 22px;font-family:var(--mono);font-size:var(--t-micro);color:var(--muted);letter-spacing:.02em}
+.meta b{color:var(--ink-2);font-weight:500}
+
+.quote{margin:40px 0 0;padding:20px 0 20px 22px;border-left:2px solid var(--accent)}
+.quote p{font-family:var(--serif);font-style:italic;font-size:1.35rem;line-height:1.35;color:var(--ink);max-width:44ch}
+.quote .why{margin-top:12px;font-family:var(--sans);font-style:normal;font-size:var(--t-small);line-height:1.6;color:var(--ink-2);max-width:64ch}
+
+.rail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:44px;list-style:none;padding:0}
+@media (max-width:760px){.rail{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.rail a{display:grid;gap:6px;height:100%;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:inherit;text-decoration:none;transition:border-color .15s;align-content:start}
+.rail a:hover{border-color:var(--border-strong)}
+.rail .count{font-family:var(--pixel);font-size:2rem;line-height:1;font-variant-numeric:tabular-nums}
+.rail .label{font-family:var(--mono);font-size:var(--t-micro);letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink)}
+.rail .theme{font-size:var(--t-small);color:var(--muted);line-height:1.4}
+
+section{margin-top:72px}
+.sec-head{display:grid;gap:10px;padding-bottom:18px;border-bottom:1px solid var(--border)}
+.sec-head .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.sec-head p{color:var(--ink-2)}
+
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:var(--t-micro);font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid transparent;white-space:nowrap;width:max-content}
+.chip.adopt{background:var(--pass-wash);color:var(--pass)}
+.chip.adapt{background:var(--accent-wash);color:var(--accent-ink)}
+.chip.skip{border-color:var(--border-strong);color:var(--muted)}
+
+.item{display:grid;grid-template-columns:150px minmax(0,1fr);gap:22px;padding:26px 0;border-bottom:1px solid var(--border)}
+@media (max-width:640px){.item{grid-template-columns:minmax(0,1fr);gap:10px}}
+.item .side{display:flex;flex-direction:column;gap:8px;font-family:var(--mono);font-size:var(--t-micro);color:var(--muted);padding-top:2px}
+@media (max-width:640px){.item .side{flex-direction:row;flex-wrap:wrap;align-items:center;gap:8px 14px}}
+.item .id{font-family:var(--pixel);font-size:1.25rem;color:var(--ink);line-height:1}
+.item .side dl{margin:0;display:grid;gap:2px}
+.item .side dt{color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.item .side dd{margin:0;color:var(--ink-2)}
+.item .body{display:grid;gap:12px;min-width:0}
+.facet{display:grid;grid-template-columns:104px minmax(0,1fr);gap:14px}
+@media (max-width:640px){.facet{grid-template-columns:minmax(0,1fr);gap:2px}}
+.facet .k{font-family:var(--mono);font-size:var(--t-micro);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding-top:4px}
+.facet .v{color:var(--ink-2);max-width:66ch}
+.facet.lead .v{color:var(--ink)}
+
+.evidence{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:22px}
+@media (max-width:760px){.evidence{grid-template-columns:minmax(0,1fr)}}
+.evidence div{padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;display:grid;gap:6px;align-content:start}
+.evidence .n{font-family:var(--pixel);font-size:1.7rem;line-height:1;font-variant-numeric:tabular-nums}
+.evidence p{font-size:var(--t-small);color:var(--ink-2)}
+
+.fixed{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;margin-top:8px}
+@media (max-width:700px){.fixed{grid-template-columns:minmax(0,1fr)}}
+.fixed div{padding:16px 0;border-bottom:1px solid var(--border);display:grid;gap:4px;min-width:0;align-content:start}
+.fixed b{font-weight:600}
+.fixed p{font-size:var(--t-small);color:var(--ink-2)}
+
+.questions{display:grid;gap:12px;margin-top:22px;padding:0;list-style:none}
+.questions li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;align-items:start;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:8px}
+.questions .qn{font-family:var(--pixel);font-size:1.1rem;color:var(--accent-ink);line-height:1.3}
+.questions p{color:var(--ink-2)}
+.questions b{color:var(--ink);font-weight:600}
+
+.scroll-x{overflow-x:auto;margin-top:18px}
+table{width:100%;border-collapse:collapse;font-size:var(--t-small);font-variant-numeric:tabular-nums}
+th,td{padding:9px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+thead th{font-family:var(--mono);font-size:var(--t-micro);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500;white-space:nowrap}
+tbody th{font-weight:600;color:var(--ink)}
+td{color:var(--ink-2)}
+tr.group th{padding-top:22px;font-family:var(--mono);font-size:var(--t-micro);letter-spacing:.1em;text-transform:uppercase;color:var(--accent-ink);font-weight:500}
+.num{text-align:right;white-space:nowrap}
+.compare{min-width:760px}
+.compare tbody th{width:140px;font-family:var(--mono);font-size:var(--t-micro);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.compare td{width:43%}
+.boards{min-width:720px}
+.boards td.io{color:var(--muted);white-space:nowrap}
+.hl td,.hl th{background:var(--accent-wash)}
+.up{color:var(--pass)}.down{color:var(--bad)}
+.note{margin-top:14px;font-size:var(--t-small);color:var(--muted);max-width:72ch}
+.prose{display:grid;gap:12px;margin-top:18px}
+.prose p{color:var(--ink-2)}
+.legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:6px;align-items:center;font-size:var(--t-small);color:var(--muted)}
+
+.sources{margin-top:72px;padding-top:20px;border-top:1px solid var(--border);font-size:var(--t-small);color:var(--muted);display:grid;gap:10px}
+.sources ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.sources h2{font-size:1.1rem}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main class="page">
+
+<header class="hero">
+  <div class="eyebrow">Competitive research &middot; 2026-10-27</div>
+  <h1>DesignArena, and what it means for this bench</h1>
+  <p class="lede">DesignArena ranks models, coding agents and app builders by blind head-to-head votes from its users, on whatever they asked to build. This bench asks a question DesignArena never poses: does an agent build with <em>your</em> design system's components and tokens, and how much does your agent context help? Below: every instrument DesignArena uses, its 31 voted categories with today's numbers, a side-by-side comparison, and ten things worth adopting, adapting or leaving alone.</p>
+  <div class="meta">
+    <span>as of <b>2026-10-27, 19:10 CET</b></span>
+    <span>read <b>site, leaderboard API, methodology notes, 9 posts, Agent Runner README</b></span>
+    <span>votes <b>approximate (half the summed battles)</b></span>
+  </div>
+</header>
+
+<ul class="rail">
+  <li><a href="#boards"><span class="count">31</span><span class="label">voted categories</span><span class="theme">Code, office, image, video and audio. 30 boards in the navigation, plus two composites.</span></a></li>
+  <li><a href="#boards"><span class="count">8.85M</span><span class="label">pairwise votes</span><span class="theme">On the public boards today, from 7.1M+ users, refreshed every two hours.</span></a></li>
+  <li><a href="#side"><span class="count">108k</span><span class="label">on UI components</span><span class="theme">The closest board to this bench: one HTML file, Tailwind from a CDN, no design system.</span></a></li>
+  <li><a href="#disagree"><span class="count">0.01</span><span class="label">rubric vs votes</span><span class="theme">Rank agreement between DesignArena's own LLM rubric and its votes, top 15 Full Stack models.</span></a></li>
+</ul>
+
+<div class="quote">
+  <p>DesignArena tells you which model has the best taste on a blank canvas. It cannot tell you whether that model will respect your system, and its own data suggests the top-voted model is among the least likely to.</p>
+  <div class="why">The model voters pick most often on image-to-website prompts ranks 31st of 35 at following the reference it was given. See <a href="#m7">M7</a>.</div>
+</div>
+
+<section id="answer" aria-labelledby="h-answer">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-answer">The short answer</h2></div>
+  </div>
+  <div class="fixed">
+    <div><b>A preference arena, not a correctness benchmark</b><p>Users vote blind between two rendered outputs, and a Bradley-Terry fit turns the votes into an Elo-style rating per board. Everything else DesignArena runs (LLM rubrics, Micro Evals, usage panels, agent-behavior metrics, price and speed charts, one-off studies) is supplementary and stays out of the rating.</p></div>
+    <div><b>It measures taste on a blank canvas</b><p>The UI Component arena asks for a polished component in one HTML file, with Tailwind or any CDN library. No board lets a team plug in its own design system, so none can say whether a model would use it.</p></div>
+    <div><b>Its own data says voters reward ignoring the input</b><p>On image-to-website prompts, the most-preferred model follows its reference image less than 30 of 34 others, and each GPT release followed references less than the last. A design-system benchmark needs the opposite behavior, so arena rank is a weak proxy for design-system fit.</p></div>
+    <div><b>One number hides the failure mode, there too</b><p>On the Full Stack board, DesignArena's LLM rubric and its votes agree across all 49 models (Spearman 0.71) but not where a choice is made: 0.01 among the top 15 and -0.46 among the top 10. That is this bench's case for gating on the worst dimension, made with their data.</p></div>
+    <div><b>What this bench lacks is mostly rendered output and statistics</b><p>DesignArena judges what renders, attaches sample floors and errors to ratings, plots quality against price and time, records agent behavior, and draws tasks from real requests. Each maps onto a planned item (D1, B2, B1, E5) or a small new info-only measure.</p></div>
+    <div><b>What DesignArena lacks is everything this bench is for</b><p>No ground truth, no hallucination or token checks, no accessibility measure, no compile gate, no context-level lift, no CI, and no way for an outsider to rerun a number.</p></div>
+  </div>
+</section>
+
+<section id="method" aria-labelledby="h-method">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-method">How DesignArena measures</h2></div>
+    <p>Seven instruments. M1 and M2 produce every leaderboard rating; M5 to M7 are published beside the ratings, never folded into them.</p>
+  </div>
+
+  <div class="item" id="m1">
+    <div class="side"><span class="id">M1</span><dl><dt>Applies to</dt><dd>every board</dd></dl></div>
+    <div class="body">
+      <h3>Tournament</h3>
+      <div class="facet lead"><span class="k">Session</span><div class="v">A user picks a category, or a router assigns one from the prompt, then submits a prompt. Single-shot arenas draw four models plus a backup; agent and builder arenas pair two.</div></div>
+      <div class="facet"><span class="k">Votes</span><div class="v">Two pairs are shown side by side without names; the winners meet, the losers meet, and a tie-breaker settles the middle. Five votes and a full 1st to 4th ordering per session. The mobile arena also accepts a tie.</div></div>
+      <div class="facet"><span class="k">Bias controls</span><div class="v">Identities hidden until after the vote, left and right randomized, both outputs revealed together so speed does not leak, captchas at launch to keep voters human, LLM moderation of prompts. Model selection uses active sampling toward informative pairings (the About page still calls it random), and the first two models to finish are the ones shown.</div></div>
+    </div>
+  </div>
+
+  <div class="item" id="m2">
+    <div class="side"><span class="id">M2</span><dl><dt>Applies to</dt><dd>every board</dd></dl></div>
+    <div class="body">
+      <h3>Rating</h3>
+      <div class="facet lead"><span class="k">Model</span><div class="v">Bradley-Terry strengths fitted iteratively (tolerance 0.0001, at most 200 iterations), reported as 400 &times; log10(strength) on an Elo-like scale anchored at 1200. Every vote weighs the same, with no filtering or editorial adjustment.</div></div>
+      <div class="facet"><span class="k">Floors</span><div class="v">Under 15 comparisons a model is dropped before fitting; under 50 votes it carries a "new" tag; ratings count as preliminary until about 200 comparisons, varying by category.</div></div>
+      <div class="facet"><span class="k">Uncertainty</span><div class="v">The methodology notes describe the margin of error as an approximate 95% Wilson interval on win rate; the leaderboard footnote calls it the Bradley-Terry standard error. The API returns that standard error for agent, video and image-editing boards (about 10 rating points at 1,770 battles, 4 at 12,000) and none for the single-shot HTML boards.</div></div>
+      <div class="facet"><span class="k">Cadence</span><div class="v">Live results every two hours. New models usually appear within days of release; retirements are logged with a reason (superseded, or consistently bottom-ranked).</div></div>
+    </div>
+  </div>
+
+  <div class="item" id="m3">
+    <div class="side"><span class="id">M3</span><dl><dt>Applies to</dt><dd>every board</dd></dl></div>
+    <div class="body">
+      <h3>Prompts</h3>
+      <div class="facet lead"><span class="k">Source</span><div class="v">Real user prompts up to 5,000 characters. Agentic web-app prompts are classified into 14 buckets; over the last 30 days the mix was productivity 22.5%, corporate 15.2%, e-commerce 13.4%, dashboards 11.3%, education 7.8% and landing pages 7.7%, with UI components at 2.6% and data viz at 0.4%.</div></div>
+      <div class="facet"><span class="k">Enhancer</span><div class="v">An optional button has a low-cost model rewrite the prompt to two to four times its length, adding colors, layout, typography, accessibility and responsive details. The UI Component template even asks for "integration with design systems"; no system is ever supplied.</div></div>
+      <div class="facet"><span class="k">Moderation</span><div class="v">A low-cost model flags profanity, sexual content, hate, threats and political content before anything is generated.</div></div>
+    </div>
+  </div>
+
+  <div class="item" id="m4">
+    <div class="side"><span class="id">M4</span><dl><dt>Applies to</dt><dd>every board</dd></dl></div>
+    <div class="body">
+      <h3>Generation</h3>
+      <div class="facet lead"><span class="k">Single-shot</span><div class="v">Entry requires text in and one HTML, CSS and JavaScript file out. One system prompt per category, identical across providers; the UI Component prompt asks for a polished, production-ready component, with Tailwind, Heroicons or other CDN libraries allowed. Sampling and token limits follow each provider's defaults; effort levels such as xhigh and max are separate entries.</div></div>
+      <div class="facet"><span class="k">Agentic</span><div class="v">Agent Runner, DesignArena's MIT-licensed, provider-agnostic Python harness: file tools, ripgrep search, bash behind a command filter, scaffolding, screenshots, image and video tools, Vercel deploy; a configurable round limit (50 in the example) and a 120 s tool timeout. Each track starts from a pre-baked template: React and TypeScript, Supabase and Vercel for full stack, Expo, Kotlin with Compose. Per-lab tuning exists and is private.</div></div>
+      <div class="facet"><span class="k">Builders</span><div class="v">Commercial products (Lovable, Replit, v0, Figma Make, Bolt and others) get the same one-shot prompt with default settings and return a deployed URL.</div></div>
+    </div>
+  </div>
+
+  <div class="item" id="m5">
+    <div class="side"><span class="id">M5</span><dl><dt>Applies to</dt><dd>agent boards</dd><dt>In the rating</dt><dd>no</dd></dl></div>
+    <div class="body">
+      <h3>Rubrics, Micro Evals and agent behavior</h3>
+      <div class="facet lead"><span class="k">Full Stack rubric</span><div class="v">An automated LLM rubric scores each app on eight criteria: schema, seed data, API, CRUD, auth, UI, end-to-end persistence and error handling. A separate 100-point schema rubric, GPT-5.2 reading the SQL, is stored per generation and kept out of the Elo.</div></div>
+      <div class="facet"><span class="k">Micro Evals</span><div class="v">Binary, LLM-judged checks, each added only when a failure is both common in real use and discriminating. Seeded from Vercel's next-evals-oss plus failures seen on DesignArena, covering Next.js, Tailwind, Vercel deploys, Supabase, shadcn and TypeScript; reported as pass rates and a radar per agent.</div></div>
+      <div class="facet"><span class="k">Bash recovery</span><div class="v">Failures per session, retries needed to recover, and the share of failures never recovered from (the agent gave up or looped).</div></div>
+      <div class="facet"><span class="k">Price, speed</span><div class="v">Every board plots rating against price per million tokens (at 3:1 input to output) and against generation time.</div></div>
+    </div>
+  </div>
+
+  <div class="item" id="m6">
+    <div class="side"><span class="id">M6</span><dl><dt>Applies to</dt><dd>Full Stack</dd><dt>In the rating</dt><dd>no</dd></dl></div>
+    <div class="body">
+      <h3>Usage signals</h3>
+      <div class="facet lead"><span class="k">Panels</span><div class="v">Reach (views of the apps a model built, against the average), daily unique users, returning users, and the share of apps whose source code users downloaded in the last 30 days. Revealed preference rather than votes.</div></div>
+    </div>
+  </div>
+
+  <div class="item" id="m7">
+    <div class="side"><span class="id">M7</span><dl><dt>Applies to</dt><dd>blog studies</dd><dt>In the rating</dt><dd>no</dd></dl></div>
+    <div class="body">
+      <h3>Studies</h3>
+      <div class="facet lead"><span class="k">Mirroring</span><div class="v">25,000 websites that 35 models built from user reference images, compared pairwise by CLIP embedding (9.4 million pairs). The slope of website similarity on reference similarity is "mirroring"; shuffling the references flattens it to about zero, so it is real. GPT-6 Astra (max) is first by rating and 31st on mirroring (0.22 against a 0.27 median). Successive GPT releases went 0.37, 0.28, 0.25, 0.22 while their websites grew more alike whatever the input: a stronger house style.</div></div>
+      <div class="facet"><span class="k">Taste drift</span><div class="v">Website styles ranked by the same votes from January to October 2026: near-black pages with one saturated accent gained, gold-and-serif luxury and earthy beige lost. The same site can win in January and lose in October. No figures published.</div></div>
+      <div class="facet"><span class="k">Judge checks</span><div class="v">Microsoft Research Asia's OpenDesign (840 prompts, GPT-4o judging a rendered screenshot plus an interactive pass) reports 80.9% judge-human agreement and "broad agreement" with arena rankings, without a coefficient; DesignArena puts judge-human agreement at 60 to 80%. The model trained on it, AesCoder-4B, was later retired as consistently outclassed.</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="boards" aria-labelledby="h-boards">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-boards">The board catalog</h2></div>
+    <p>Pulled from the public leaderboard API on 2026-10-27. Votes are half the summed battles of the models listed, so they slightly undercount votes on models below the floor. Ratings are not comparable across boards.</p>
+  </div>
+  <div class="scroll-x">
+    <table class="boards">
+      <thead><tr><th scope="col">Board</th><th scope="col">Input to output</th><th scope="col" class="num">Models</th><th scope="col" class="num">Votes</th><th scope="col">#1 today</th></tr></thead>
+      <tbody>
+        <tr class="group"><th scope="colgroup" colspan="5">Code, single-shot (one file, same system prompt)</th></tr>
+        <tr><th scope="row">Overall HTML</th><td class="io">composite</td><td class="num">188</td><td class="num">1.84M</td><td>Claude Opus 5.5 &middot; 1386</td></tr>
+        <tr><th scope="row">Website</th><td class="io">text, image or video to HTML</td><td class="num">202</td><td class="num">1.13M</td><td>Muse Wonder (max) &middot; 1367</td></tr>
+        <tr class="hl"><th scope="row">UI Component</th><td class="io">text to HTML</td><td class="num">180</td><td class="num">108k</td><td>Kimi K3.1 Pro &middot; 1397 (268 battles)</td></tr>
+        <tr><th scope="row">Data visualization</th><td class="io">text to HTML</td><td class="num">152</td><td class="num">85k</td><td>Claude Opus 5.5 &middot; 1397</td></tr>
+        <tr><th scope="row">Game dev</th><td class="io">text to HTML</td><td class="num">189</td><td class="num">293k</td><td>GPT-6 Astra (max) &middot; 1473</td></tr>
+        <tr><th scope="row">3D design</th><td class="io">text to HTML</td><td class="num">170</td><td class="num">305k</td><td>GPT-6 Astra (max) &middot; 1503</td></tr>
+        <tr><th scope="row">SVG</th><td class="io">text to SVG</td><td class="num">134</td><td class="num">199k</td><td>Arrow 2 Telos &middot; 1533</td></tr>
+        <tr><th scope="row">ASCII art</th><td class="io">text to text</td><td class="num">97</td><td class="num">21k</td><td>Claude Opus 5 &middot; 1358</td></tr>
+
+        <tr class="group"><th scope="colgroup" colspan="5">Code, agentic (Agent Runner, multi-file, deployed)</th></tr>
+        <tr><th scope="row">Overall agentic</th><td class="io">composite</td><td class="num">69</td><td class="num">318k</td><td>GPT-6 Astra (max) &middot; 1415</td></tr>
+        <tr><th scope="row">Frontend web app</th><td class="io">text or image to React app</td><td class="num">52</td><td class="num">81k</td><td>GPT-6 Astra (max) &middot; 1371</td></tr>
+        <tr><th scope="row">Full stack</th><td class="io">text to React, Supabase, Vercel</td><td class="num">49</td><td class="num">60k</td><td>GPT-6 Astra (xhigh) &middot; 1357</td></tr>
+        <tr><th scope="row">React Native</th><td class="io">text to Expo app</td><td class="num">54</td><td class="num">40k</td><td>GPT-6 Astra (xhigh), Claude Opus 5.5 &middot; 1306</td></tr>
+        <tr><th scope="row">Android (Kotlin)</th><td class="io">text to APK</td><td class="num">38</td><td class="num">21k</td><td>Grok 4.6 &middot; 1290</td></tr>
+        <tr><th scope="row">Agentic game dev</th><td class="io">text to web game</td><td class="num">27</td><td class="num">20k</td><td>Claude Fable 5 &middot; 1248</td></tr>
+        <tr><th scope="row">Godot game dev</th><td class="io">text to Godot project</td><td class="num">24</td><td class="num">13k</td><td>GPT-6 Astra (xhigh) &middot; 1348</td></tr>
+        <tr><th scope="row">Blender 3D</th><td class="io">text to 3D asset</td><td class="num">34</td><td class="num">3k</td><td>Gemini 4 Argon &middot; 1438</td></tr>
+        <tr><th scope="row">Python-PPTX slides</th><td class="io">text to .pptx</td><td class="num">33</td><td class="num">23k</td><td>GPT-6 Astra (max) &middot; 1413</td></tr>
+        <tr><th scope="row">HTML slides</th><td class="io">text to HTML deck</td><td class="num">27</td><td class="num">23k</td><td>GPT-6 Astra (max) &middot; 1534</td></tr>
+        <tr><th scope="row">Spreadsheet</th><td class="io">text to workbook</td><td class="num">25</td><td class="num">1k</td><td>Claude Fable 5.1 &middot; 1416</td></tr>
+
+        <tr class="group"><th scope="colgroup" colspan="5">Builders (commercial products, default settings)</th></tr>
+        <tr><th scope="row">Website builders</th><td class="io">text to deployed URL</td><td class="num">18</td><td class="num">14k</td><td>Replit (Design Mode) &middot; 1268</td></tr>
+        <tr><th scope="row">Mobile builders</th><td class="io">text to app preview</td><td class="num">5</td><td class="num">15k</td><td>Bolt.new Mobile &middot; 1223</td></tr>
+        <tr><th scope="row">Slides, own harness</th><td class="io">text to deck</td><td class="num">13</td><td class="num">13k</td><td>Claude Opus 5.5 in Claude Code &middot; 1299</td></tr>
+
+        <tr class="group"><th scope="colgroup" colspan="5">Image</th></tr>
+        <tr><th scope="row">Image</th><td class="io">text to image</td><td class="num">86</td><td class="num">3.35M</td><td>GPT-Image-2.5 Sunburst &middot; 1412</td></tr>
+        <tr><th scope="row">Logo</th><td class="io">text to image</td><td class="num">83</td><td class="num">1.09M</td><td>GPT Image 2 &middot; 1365</td></tr>
+        <tr><th scope="row">Graphic design</th><td class="io">text to image</td><td class="num">82</td><td class="num">491k</td><td>GPT-Image-2.5 Sunburst &middot; 1436</td></tr>
+        <tr><th scope="row">Image editing</th><td class="io">image to image</td><td class="num">52</td><td class="num">524k</td><td>GPT-Image-2.5 Sunburst &middot; 1402</td></tr>
+
+        <tr class="group"><th scope="colgroup" colspan="5">Video</th></tr>
+        <tr><th scope="row">Video</th><td class="io">text to clip</td><td class="num">50</td><td class="num">430k</td><td>Gemini Omni 1.1 Flash &middot; 1362</td></tr>
+        <tr><th scope="row">Image to video</th><td class="io">image to clip</td><td class="num">44</td><td class="num">239k</td><td>MiniMax H3 Max &middot; 1319</td></tr>
+        <tr><th scope="row">Multi-image to video</th><td class="io">images to clip</td><td class="num">24</td><td class="num">65k</td><td>Seedance 2.5 &middot; 1354</td></tr>
+        <tr><th scope="row">Multimodal to video</th><td class="io">mixed to clip</td><td class="num">18</td><td class="num">18k</td><td>Seedance 2.5 &middot; 1372</td></tr>
+        <tr><th scope="row">Video editing</th><td class="io">video to video</td><td class="num">22</td><td class="num">48k</td><td>MiniMax H3 Max &middot; 1373</td></tr>
+
+        <tr class="group"><th scope="colgroup" colspan="5">Audio</th></tr>
+        <tr><th scope="row">Text-to-speech</th><td class="io">text to speech</td><td class="num">33</td><td class="num">122k</td><td>Google Gemini 3.8 Flash TTS &middot; 1455</td></tr>
+        <tr><th scope="row">Audio Realism Bench</th><td class="io">text to speech</td><td class="num">33</td><td class="num">8k</td><td>Humanity &middot; 1484</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">The Overall HTML composite combines website, UI component, game dev, data viz and 3D; the agentic composite combines the agentic boards. UI Component, data viz, logo and graphic design have public vote data but no standalone board in today's navigation. Image to HTML and Video to Website are input-modality views of the Website board; Image to Frontend and Agentic Image to HTML are the agentic equivalents. Speech-to-speech returned no public data.</p>
+</section>
+
+<section id="disagree" aria-labelledby="h-disagree">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-disagree">When the rubric and the votes disagree</h2></div>
+    <p>The Full Stack board publishes two rankings of the same models side by side: the vote-based rating and the automated eight-criterion LLM rubric. Joined by model name, 49 models appear on both.</p>
+  </div>
+  <div class="evidence">
+    <div><span class="n">0.71</span><p>Spearman rank correlation across all 49 models. Both instruments separate strong models from weak ones.</p></div>
+    <div><span class="n">0.01</span><p>Among the 15 highest-rated models by votes. No agreement on order.</p></div>
+    <div><span class="n down">-0.46</span><p>Among the top 10 by votes. The rubric leans the other way.</p></div>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th scope="col" class="num">Votes rank</th><th scope="col">Model</th><th scope="col" class="num">Rating</th><th scope="col" class="num">Rubric avg</th><th scope="col" class="num">Rubric rank (of 59)</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><th scope="row">GPT-6 Astra (xhigh)</th><td class="num">1357</td><td class="num">6.5</td><td class="num">22</td></tr>
+        <tr><td class="num">2</td><th scope="row">Claude Fable 5.1</th><td class="num">1326</td><td class="num">6.7</td><td class="num">17</td></tr>
+        <tr><td class="num">3</td><th scope="row">Kimi K3</th><td class="num">1315</td><td class="num">6.5</td><td class="num">21</td></tr>
+        <tr><td class="num">4</td><th scope="row">Muse Spark 1.3 Max</th><td class="num">1312</td><td class="num">7.2</td><td class="num">4</td></tr>
+        <tr><td class="num">5</td><th scope="row">Claude Opus 5</th><td class="num">1306</td><td class="num">6.8</td><td class="num">14</td></tr>
+        <tr><td class="num">6</td><th scope="row">Qwen3.8 Max</th><td class="num">1305</td><td class="num">6.8</td><td class="num">13</td></tr>
+        <tr><td class="num">7</td><th scope="row">Muse Spark 1.3 (xhigh)</th><td class="num">1295</td><td class="num">7.2</td><td class="num">3</td></tr>
+        <tr><td class="num">8</td><th scope="row">Claude Fable 5</th><td class="num">1280</td><td class="num">6.1</td><td class="num">25</td></tr>
+        <tr><td class="num">9</td><th scope="row">Grok 4.6</th><td class="num">1264</td><td class="num">7.7</td><td class="num">2</td></tr>
+        <tr><td class="num">10</td><th scope="row">GPT-5.6 Sol (xhigh)</th><td class="num">1262</td><td class="num">7.0</td><td class="num">6</td></tr>
+        <tr class="hl"><td class="num">14</td><th scope="row">Gemini 3.8 Flash</th><td class="num">1244</td><td class="num">7.7</td><td class="num">1</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>The two instruments measure different things (the rubric leans on backend quality, the votes on what a voter sees and clicks), so some disagreement is expected. What matters is where it sits: they agree on strong versus weak and disagree about the order exactly where a team would choose. The same observation produced this bench's rule of reporting each dimension and gating on the worst, rather than letting one composite pick a winner.</p>
+  </div>
+  <p class="note">Method: Spearman on ranks, ties averaged; rubric rank is the order listed on the board. Computed from the public API and the rubric table on 2026-10-27; duplicate display names were excluded from the join.</p>
+</section>
+
+<section id="side" aria-labelledby="h-side">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-side">Side by side</h2></div>
+    <p>Both answer "how good is AI at UI". They hold different things fixed: DesignArena holds the task framing fixed and varies the model; this bench holds the system fixed and varies model and context.</p>
+  </div>
+  <div class="scroll-x">
+    <table class="compare">
+      <thead><tr><th scope="col">Aspect</th><th scope="col">DesignArena</th><th scope="col">open-design-system-bench</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Question</th><td>Which model, agent or builder produces output people prefer?</td><td>How well do agents build with your design system, and how much does your agent context help?</td></tr>
+        <tr><th scope="row">What is ranked</th><td>Models, effort settings, agent setups and builder products, one rating per board</td><td>Design systems; models and context levels are axes of the matrix, not a leaderboard</td></tr>
+        <tr><th scope="row">Signal</th><td>Blind pairwise human votes, Bradley-Terry rating</td><td>Five mechanical graders plus LLM-judged rubrics; weighted composite and a worst-dimension gate</td></tr>
+        <tr><th scope="row">Ground truth</th><td>None; preference is the target</td><td>The system's extracted catalog, props and tokens; optional hidden expectations per task</td></tr>
+        <tr><th scope="row">Tasks</th><td>Live user prompts in any domain, optional AI enhancement</td><td>14 frozen intent-level tasks (10 starter, 4 hard) that never name a component, leak-linted</td></tr>
+        <tr><th scope="row">Design system</th><td>Never the team's own: one HTML file with CDN libraries, or a pre-baked template</td><td>The team's own, consumed from source or npm, React or custom elements</td></tr>
+        <tr><th scope="row">What is judged</th><td>The rendered, interactive result</td><td>The diff (AST, compiler, LLM judge); screenshots appear in the gallery and are not scored</td></tr>
+        <tr><th scope="row">Accessibility</th><td>Not measured in any board or panel read</td><td>Eight AST rules with a configurable accessible-name vocabulary</td></tr>
+        <tr><th scope="row">Agent harness</th><td>Agent Runner: open source, provider-agnostic, with shell, screenshots and deploy</td><td>claude-code with read, search and edit tools only (no shell, no web), isolated from the operator's setup; other providers single-shot and never ranked against it</td></tr>
+        <tr><th scope="row">Platforms</th><td>HTML, React, full stack, Expo, Kotlin, Godot, Blender, slides, sheets, image, video, audio</td><td>React and TypeScript; web components</td></tr>
+        <tr><th scope="row">Uncertainty</th><td>Sample floors, standard errors on some boards, Wilson intervals</td><td>Min and max per cell, three reps in <code>full</code>; spread and intervals planned (B2)</td></tr>
+        <tr><th scope="row">Cost and speed</th><td>Rating against price and against generation time on every board</td><td>Generator cost and duration per cell; no chart; judge spend not yet recorded (B1)</td></tr>
+        <tr><th scope="row">Reproducible</th><td>Not from outside: live prompts, private votes, private per-lab agent configs</td><td>Frozen baselines, offline re-grading of stored diffs, provenance planned (B1)</td></tr>
+        <tr><th scope="row">CI</th><td>None</td><td><code>ci</code> with coverage, regression and inconclusive exit codes</td></tr>
+        <tr><th scope="row">Static analysis</th><td>None</td><td>Seven-check audit and AI-Readiness Score, no API key</td></tr>
+        <tr><th scope="row">Scale</th><td>About 8.85 million votes over 31 categories; 7.1M+ users</td><td>2 to 90 cells per system per run, about $1.50 and 2 to 5 minutes each</td></tr>
+        <tr><th scope="row">Openness</th><td>Public boards, API with attribution, system prompts and harness published</td><td>MIT, runs locally, bring your own key</td></tr>
+        <tr><th scope="row">Cadence</th><td>Refreshed every two hours</td><td>When the operator runs it; CI on demand</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="gaps" aria-labelledby="h-gaps">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-gaps">What this bench is missing, and what to do</h2></div>
+    <p>Ten gaps, each tied to the roadmap where one exists. Every new measure follows the rules that stay fixed: it shadows before it gates, it reports unmeasured instead of guessing, and it adds no hosted service.</p>
+    <div class="legend"><span class="chip adopt">adopt</span><span>fits a planned item</span><span class="chip adapt">adapt</span><span>new, info-only first</span><span class="chip skip">skip</span><span>borrow the idea, not the metric</span></div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G1</span><span class="chip adopt">adopt</span><dl><dt>Lands</dt><dd>D1</dd><dt>Size</dt><dd>M-L</dd></dl></div>
+    <div class="body">
+      <h3>Judge what renders</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Every vote is cast on a rendered, interactive result: an iframe, a deployed URL, an Expo QR code on a phone. A page that crashes or renders empty loses by construction.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">The judge reads the diff. Gallery screenshots (headless Chrome at 1280 by 900) are for people and never scored, so a cell can score 81 and render nothing.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">Build D1 as planned (build, mount, runtime errors, narrow-viewport overflow), and capture the accessibility tree at two widths in the same pass, so accessible names can be checked in the running page and not only in the AST.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">D1. A new dimension shadows before it gates; an observation the browser could not make stays unmeasured.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G2</span><span class="chip adapt">adapt</span><dl><dt>Lands</dt><dd>new, after D1</dd><dt>Size</dt><dd>M</dd></dl></div>
+    <div class="body">
+      <h3>A human signal to calibrate the judge</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Votes are the primary signal and LLM rubrics stay supplementary. The OpenDesign work they publicized puts judge-human agreement between 60 and 80%.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">Judgment carries 0.30 of the composite and is entirely model-judged. Nobody has measured how often a design-system team agrees with it.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">A blind review page built from the gallery: two unnamed renders of the same task, sides randomized, the reviewer picks one or calls a tie. Votes land as JSON in the run directory; the report adds judge-human agreement per rubric and a Bradley-Terry ordering of context levels. Small n by design: a team can cast 50 votes in a sitting.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">GitHub-first and offline, tested with synthetic votes; no new dependency, since Bradley-Terry is a short iterative fit. Calibrates the judge; never becomes the target.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G3</span><span class="chip adopt">adopt</span><dl><dt>Lands</dt><dd>B2</dd><dt>Size</dt><dd>S</dd></dl></div>
+    <div class="body">
+      <h3>Uncertainty on every number</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Sample floors (15 comparisons to be ranked, "new" under 50, preliminary until about 200), standard errors on some boards, Wilson intervals on win rates.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">Min and max per cell; three reps only in <code>full</code>; the same cell moved 8.6 points on average between two runs of identical scoring code.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">In B2, attach an interval (bootstrap over reps and tasks) to each composite and to Lift, and declare a floor below which a number is labeled directional or withheld. Their UI Component board shows why: the #1 model leads #2 by 2 points on 268 battles, and the API returns no standard error for that board.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">B2, and null over a guess.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G4</span><span class="chip adopt">adopt</span><dl><dt>Lands</dt><dd>B1, B2</dd><dt>Size</dt><dd>S</dd></dl></div>
+    <div class="body">
+      <h3>Quality against cost and time</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Every board plots rating against price and against generation time, with the efficient corner marked.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">Generator cost and duration are recorded per cell; judge spend is not; single-shot cost is unset by design.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">A scatter in <code>report.html</code> and <code>compare</code>: overall score against measured cell cost and duration, per model and context level, so a team sees what a skill bundle costs per point gained. Measured spend only; unset stays unset.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">B1 records judge spend; B4 prices gateway models.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G5</span><span class="chip adapt">adapt</span><dl><dt>Lands</dt><dd>E5</dd><dt>Size</dt><dd>M</dd></dl></div>
+    <div class="body">
+      <h3>Tasks that look like real work</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Tasks are live user prompts, bucketed into 14 types, with a breakdown per type.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">14 frozen, domain-neutral tasks and no task taxonomy in the report.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">Tag each task with a pattern family (forms, feedback, data display, navigation, overlays, flows) and break scores down by family. Size E5's product packs by observed demand (DesignArena's mix leads with productivity, corporate, e-commerce and dashboards), and allow an optional team pack mined from a team's own tickets, kept out of CI.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">E5. The leak linter applies to every pack.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G6</span><span class="chip adapt">adapt</span><dl><dt>Lands</dt><dd>new, with B1</dd><dt>Size</dt><dd>S-M</dd></dl></div>
+    <div class="body">
+      <h3>Process telemetry from the transcript</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Agent boards record tool chains, multi-file edits and re-prompts; the Full Stack board ranks recovery from shell failures.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v"><code>transcript.jsonl</code> is stored for every agentic cell and read by no grader; Engagement says only whether the system was used.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">Info-only facts per cell: turns, whether the context files were opened, reads of the system's source or docs before the first edit, edit count, time to the first design-system import. Together they answer the AI-readiness question directly: can an agent find what it needs? Shell recovery does not apply, since cells have no shell.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">The E8 rule: info-only until it shows behavioral value.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G7</span><span class="chip adapt">adapt</span><dl><dt>Lands</dt><dd>new</dd><dt>Size</dt><dd>M</dd></dl></div>
+    <div class="body">
+      <h3>Multi-turn persistence</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Agent arenas let users re-prompt after each turn; multi-turn builder prompts are planned.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">One instruction per cell.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">Optional follow-up prompts on a task ("add a disabled state", "support dark mode"), graded after each turn, to measure whether design-system use holds or decays as a session grows. Diff grading already works per turn.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">A task schema extension; one judge call per turn.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G8</span><span class="chip adapt">adapt</span><dl><dt>Lands</dt><dd>E2</dd><dt>Size</dt><dd>L</dd></dl></div>
+    <div class="body">
+      <h3>Design input</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Image to HTML, Video to Website and Image to Frontend boards. The mirroring study measures reference fidelity with embeddings and a shuffle control instead of pixel diffs.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">Text prompts only; pixel diffing is ruled out.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">When E2 starts, grade design-to-code tasks the existing way (components, tokens, accessibility), and consider an embedding-based fidelity signal modeled on mirroring, optional and outside the gate.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">E2. An embedding model is a new dependency, so it stays optional.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G9</span><span class="chip adapt">adapt</span><dl><dt>Lands</dt><dd>E1, E3</dd><dt>Size</dt><dd>L</dd></dl></div>
+    <div class="body">
+      <h3>A second harness, more platforms</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">One open harness runs dozens of models as agents on equal tools; tracks for React, full stack, Expo, Kotlin, Godot and Blender each start from their own template.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">One agentic family (claude-code); React and custom elements.</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">Evaluate Agent Runner for E1 as a subprocess adapter, configured to this bench's tool policy (no shell, no web) and recorded in B1. For E3, copy the per-track template pattern for React Native.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">E1, E3, B1.</div></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="side"><span class="id">G10</span><span class="chip skip">skip</span><dl><dt>Lands</dt><dd>E7</dd><dt>Size</dt><dd>-</dd></dl></div>
+    <div class="body">
+      <h3>Outcome signals</h3>
+      <div class="facet"><span class="k">They do</span><div class="v">Usage panels: views, daily users, returning users, source downloads.</div></div>
+      <div class="facet"><span class="k">Here</span><div class="v">No outcome data; tier thresholds wait for independent outcomes (E7).</div></div>
+      <div class="facet lead"><span class="k">Proposal</span><div class="v">No metric. When calibrating tiers, use an outcome a team can observe, such as the share of agent-written UI changes merged without design-system review comments.</div></div>
+      <div class="facet"><span class="k">Fits</span><div class="v">E7.</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="order" aria-labelledby="h-order">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-order">Suggested order</h2></div>
+    <p>Within the roadmap's existing order: instrument and comparability first, new evidence later.</p>
+  </div>
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th scope="col" class="num">#</th><th scope="col">Proposal</th><th scope="col">Borrowed from</th><th scope="col">Lands</th><th scope="col">Size</th></tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><th scope="row">Intervals and sample floors (G3)</th><td>Rating floors, standard errors, Wilson intervals</td><td>B2</td><td>S</td></tr>
+        <tr><td class="num">2</td><th scope="row">Quality against cost and time (G4)</th><td>Price and speed charts</td><td>B1, B2</td><td>S</td></tr>
+        <tr><td class="num">3</td><th scope="row">Process telemetry, info-only (G6)</th><td>Agent behavior, bash recovery</td><td>with B1</td><td>S-M</td></tr>
+        <tr><td class="num">4</td><th scope="row">Rendered capture with the accessibility tree (G1)</th><td>Judging what renders</td><td>D1</td><td>M-L</td></tr>
+        <tr><td class="num">5</td><th scope="row">Blind designer review and judge agreement (G2)</th><td>Pairwise votes, OpenDesign validation</td><td>after D1</td><td>M</td></tr>
+        <tr><td class="num">6</td><th scope="row">Task families and a real-work mix (G5)</th><td>Prompt buckets, per-type breakdowns</td><td>E5</td><td>M</td></tr>
+        <tr><td class="num">7</td><th scope="row">Multi-turn follow-ups (G7)</th><td>Re-prompting in agent arenas</td><td>new</td><td>M</td></tr>
+        <tr><td class="num">8</td><th scope="row">Agent Runner as the second family (G9)</th><td>Agent Runner</td><td>E1</td><td>L</td></tr>
+        <tr><td class="num">9</td><th scope="row">React Native track (G9)</th><td>Expo track template</td><td>E3</td><td>M</td></tr>
+        <tr><td class="num">10</td><th scope="row">Design input with embedding fidelity (G8)</th><td>Image to HTML, mirroring</td><td>E2</td><td>L</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="ahead" aria-labelledby="h-ahead">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-ahead">Where this bench is ahead</h2></div>
+  </div>
+  <div class="fixed">
+    <div><b>The design system is the subject</b><p>Context levels (bare, AGENTS.md, skill) and paired Lift say whether a team's docs help agents. DesignArena holds context fixed and varies the model, so it cannot say whether your AGENTS.md is worth keeping.</p></div>
+    <div><b>Ground truth, extracted</b><p>Catalog and tokens come from the system's own source, so a hallucinated component, an invented prop, a raw hex value or a foreign UI import is a fact, not an opinion. Stale catalogs are refused.</p></div>
+    <div><b>Accessibility is graded</b><p>Eight AST rules with a configurable accessible-name vocabulary today, runtime checks planned. None of DesignArena's boards or panels read here measures accessibility.</p></div>
+    <div><b>Failure modes stay visible</b><p>Six dimensions and a worst-dimension gate, with "ignored the design system" as its own metric. DesignArena publishes one rating per board, and its own Full Stack data shows how that reorders the frontier.</p></div>
+    <div><b>Hidden ground truth</b><p>Prompts never name components, and a linter enforces it. DesignArena's enhancer does the reverse, writing concrete specifications into the prompt.</p></div>
+    <div><b>Reproducible and private</b><p>Frozen baselines, stored diffs re-graded with no model call, CI with coverage and inconclusive exits, all on the team's own machine. No outsider can rerun a DesignArena number: prompts are live, votes are private, per-lab agent configs are private.</p></div>
+    <div><b>House style, measured in code</b><p>The vocabulary check uses a lexicon of names models invented across 898 graded generations. It is the code-level counterpart of DesignArena's "projecting": what a model does when it falls back on its own habits.</p></div>
+    <div><b>Seconds, no key</b><p>The static audit scores AI-readiness with no model at all, and written reports must trace every figure to computed data. DesignArena has no equivalent of either.</p></div>
+  </div>
+</section>
+
+<section id="skip" aria-labelledby="h-skip">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-skip">What not to copy</h2></div>
+  </div>
+  <div class="fixed">
+    <div><b>A public per-model leaderboard</b><p>The roadmap rules it out: the bench ranks design systems, and model columns exist to show that a finding is not one model's quirk.</p></div>
+    <div><b>Crowd preference as the objective</b><p>Voters reward models that impose a house style over the input, and DesignArena's own essay on taste lists novelty-seeking votes, unrealistic prompts and low stakes for the grader as weaknesses. Use human votes to calibrate the judge (G2), not as the target.</p></div>
+    <div><b>One rating per board</b><p>Two instruments on the same Full Stack board order the top ten differently. Keep six dimensions and the gate.</p></div>
+    <div><b>Prompt enhancement</b><p>Rewriting prompts with design specifics would push expected components and styles into the task and break hidden ground truth.</p></div>
+    <div><b>A live task set in the gate</b><p>Live prompts keep DesignArena current and make months incomparable, and its own drift study shows the same output scoring differently by month. The gate needs a frozen suite; real-work prompts belong in an optional pack.</p></div>
+    <div><b>Pixel diffing</b><p>Still out of scope. If design input arrives (E2), an embedding-based fidelity signal like mirroring is the closer fit.</p></div>
+  </div>
+</section>
+
+<section id="questions" aria-labelledby="h-questions">
+  <div class="sec-head">
+    <div class="row"><h2 id="h-questions">Open questions</h2></div>
+  </div>
+  <ul class="questions">
+    <li><span class="qn">Q1</span><p><b>Human review lane (G2).</b> Is a 50-vote designer session per run worth building, given it can only ever be small-n and info-only? It is the only route to a measured judge-human agreement for the dimension that carries 30% of the composite.</p></li>
+    <li><span class="qn">Q2</span><p><b>Visual judge.</b> Should D1 stop at DOM, runtime and accessibility-tree facts, or later add a vision-model rubric on screenshots in shadow mode? DesignArena and OpenDesign both rely on rendered judgments; Terra's review warns that a screenshot cannot carry DOM facts.</p></li>
+    <li><span class="qn">Q3</span><p><b>Second agentic family (E1).</b> Agent Runner gives one tool interface across many providers, but its default policy includes a shell. Adopt it under this bench's no-shell policy, or wait for another vendor CLI?</p></li>
+    <li><span class="qn">Q4</span><p><b>Task mix (E5).</b> Size product task packs by DesignArena's observed request mix, or by a team's own ticket history?</p></li>
+  </ul>
+</section>
+
+<footer class="sources">
+  <h2>Sources</h2>
+  <p>Read 2026-10-27. Leaderboard figures come from DesignArena's public API (<code>POST /api/leaderboard</code>, <code>GET /api/registry</code>) and belong to DesignArena; its API terms ask for attribution and a link to <a href="https://www.designarena.ai">designarena.ai</a>.</p>
+  <ul>
+    <li><a href="https://www.designarena.ai/leaderboard">Leaderboards</a>, including the Full Stack board's rubric and usage panels and the FAQ</li>
+    <li><a href="https://www.designarena.ai/about">Methodology (About page)</a> and <a href="https://notes.designarena.ai/methodology/">methodology notes</a>: tournament, Bradley-Terry fit, floors, enhancer and moderation prompts, participation rules</li>
+    <li><a href="https://www.designarena.ai/system-prompts">System prompts</a> for the single-shot categories</li>
+    <li><a href="https://docs.designarena.ai/introduction.md">API docs</a> and <a href="https://www.designarena.ai/changelog">changelog</a></li>
+    <li><a href="https://notes.designarena.ai/fullstack-arena-methodology/">Fullstack Arena methodology</a>, <a href="https://notes.designarena.ai/introducing-micro-evals/">Introducing Micro Evals</a>, <a href="https://notes.designarena.ai/evaluating-mobile-app-building-agents/">Evaluating mobile app-building agents</a></li>
+    <li><a href="https://notes.designarena.ai/introwhite-label-agent-harness/">Agent Runner announcement</a> and <a href="https://github.com/Design-Arena/agent-runner">github.com/Design-Arena/agent-runner</a> (MIT)</li>
+    <li><a href="https://www.designarena.ai/blog/gpt-6-astra-opinionated">How being opinionated gives GPT-6 Astra an edge</a> (mirroring) and <a href="https://www.designarena.ai/blog/when-does-taste-become-slop">When does taste become slop?</a> (drift)</li>
+    <li><a href="https://notes.designarena.ai/how-microsoft-research-asia-used-design-arena-to-validate-their-aesthetic-coding-benchmark/">How Microsoft Research Asia used Design Arena</a> and the paper, <a href="https://arxiv.org/abs/2510.23272">Code Aesthetics with Agentic Reward Feedback</a></li>
+    <li><a href="https://notes.designarena.ai/in-pursuit-of-a-benchmark-for-human-taste/">In pursuit of a benchmark for human taste</a> and <a href="https://notes.designarena.ai/what-weve-learned-from-50-000-ai-slides-generations-open-sourced-for-you-today-2/">What we've learned from 50,000+ AI slides generations</a></li>
+    <li><a href="https://news.ycombinator.com/item?id=44878257">Launch HN: Design Arena (YC S25)</a>, for captchas and early criticism</li>
+    <li>This repo: <code>README.md</code>, <code>ROADMAP.md</code>, <code>AGENTS.md</code>, <code>src/grade/judge.ts</code>, <code>src/agents/claude-code.ts</code>, <code>src/report/screenshots.ts</code>, <code>roadmap-terra.html</code></li>
+  </ul>
+</footer>
+
+</main>
+</body>
+</html>

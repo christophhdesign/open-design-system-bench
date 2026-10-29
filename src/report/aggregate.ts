@@ -109,3 +109,27 @@ export function buildRunResults(manifest: RunManifest, records: CellRecord[]): R
     aggregates,
   };
 }
+
+/**
+ * An ok cell with no judge verdict: run with --no-judge, or the judge failed.
+ * A cell whose rubrics were all withheld was judged (nothing to grade) and
+ * carries judgedBy, so it is not missing. Older runs record neither field;
+ * there the missing judgment dimension is the signal.
+ */
+export function isJudgeMissing(rec: CellRecord): boolean {
+  return rec.status === 'ok' && !!rec.result && !rec.result.dimensions['judgment'] && !rec.judgedBy;
+}
+
+/** How a run was judged, for report headers and compare: "haiku x3", coverage counts. */
+export function judgeSetup(records: CellRecord[]): { label: string; judged: number; ok: number; missing: number } {
+  const ok = records.filter((r) => r.status === 'ok' && r.result);
+  const missing = ok.filter(isJudgeMissing).length;
+  const labels = [
+    ...new Set(
+      ok.filter((r) => r.judgedBy).map((r) => `${r.judgedBy!.provider ? `${r.judgedBy!.provider}:` : ''}${r.judgedBy!.model} x${r.judgedBy!.samples}`),
+    ),
+  ].sort();
+  const judged = ok.length - missing;
+  const label = labels.length ? labels.join(' + ') : judged ? 'not recorded' : 'none';
+  return { label, judged, ok: ok.length, missing };
+}

@@ -10,12 +10,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { applyFoundationsCssPlaceholder, copyTemplate, substitutePlaceholders } from './fixture.ts';
-import { paths } from '../config.ts';
+import { applyFoundationsCssPlaceholder, copyTemplate, substitutePlaceholders, systemTsPaths, WORKSPACE_README } from './fixture.ts';
+import { attributeTscErrors, gradeCompile } from '../grade/mechanical/compile.ts';
+import type { GradeContext } from '../grade/context.ts';
+import { PKG_ROOT, paths } from '../config.ts';
 import type { SystemConfig } from '../types.ts';
 
 const SOURCE_APP_DIR = join(paths.fixturesDir, 'source-app');
@@ -283,4 +286,119 @@ test('custom-elements-app resolves the same two alias shapes', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('every generic fixture shows the agent the same README, and the same task stub apart from consumption', () => {
+  const npmAppDir = join(paths.fixturesDir, 'npm-app');
+  const templates = [SOURCE_APP_DIR, npmAppDir, CUSTOM_ELEMENTS_APP_DIR];
+  // No template ships its own README: copyTemplate writes the one shared text.
+  for (const dir of templates) assert.equal(existsSync(join(dir, 'README.md')), false, `${dir} ships a README.md`);
+  for (const dir of templates) {
+    const staged = mkdtempSync(join(tmpdir(), 'odsb-readme-'));
+    try {
+      copyTemplate(dir, staged);
+      assert.equal(readFileSync(join(staged, 'README.md'), 'utf8'), WORKSPACE_README);
+    } finally {
+      rmSync(staged, { recursive: true, force: true });
+    }
+  }
+  assert.doesNotMatch(WORKSPACE_README, /design system|package|node_modules/i, 'the README says where to work, not what to use');
+  // Source and npm consume the same React components, so the agent starts from the same stub.
+  // The custom-elements stub differs on purpose: it explains that elements are used as tags.
+  const stub = (dir: string) => readFileSync(join(dir, 'src/task/index.tsx'), 'utf8');
+  assert.equal(stub(SOURCE_APP_DIR), stub(npmAppDir));
+});
+
+// A synthetic monorepo shaped like Mantine: ui imports its sibling hooks by
+// package name, the workspace link points at built types a source checkout
+// lacks, and only the repo-root tsconfig maps the scope to source. Staged
+// through the real source-app template; plain TypeScript, so checking it needs
+// nothing beyond the root install.
+function stageMonorepo(hooksSource = 'export function useLabel(s: string): string { return s.trim(); }\n') {
+  const root = mkdtempSync(join(tmpdir(), 'odsb-monorepo-'));
+  const ws = mkdtempSync(join(tmpdir(), 'odsb-ws-'));
+  const write = (base: string, rel: string, body: string) => {
+    mkdirSync(join(base, rel, '..'), { recursive: true });
+    writeFileSync(join(base, rel), body);
+  };
+  write(root, 'tsconfig.json', JSON.stringify({ compilerOptions: { paths: { '@acme/*': ['./packages/*/src'], '@/*': ['./app/*'], '*': ['./vendor/*'], 'examples/*': ['./apps/examples/*'] } } }));
+  write(root, 'packages/ui/tsconfig.json', JSON.stringify({ compilerOptions: { strict: true } }));
+  write(root, 'packages/ui/src/index.ts', "import { useLabel } from '@acme/hooks';\nexport function Button(p: { label: string }): string { return useLabel(p.label); }\n");
+  write(root, 'packages/hooks/package.json', JSON.stringify({ name: '@acme/hooks', types: './lib/index.d.ts' }));
+  write(root, 'packages/hooks/src/index.ts', hooksSource);
+  mkdirSync(join(root, 'node_modules/@acme'), { recursive: true });
+  symlinkSync(join(root, 'packages/hooks'), join(root, 'node_modules/@acme/hooks'));
+  const cfg = { root, componentsSrc: 'packages/ui/src', componentsPkg: '@acme/ui', foundationsPkg: '@acme/ui' } as SystemConfig;
+  copyTemplate(SOURCE_APP_DIR, ws);
+  substitutePlaceholders(ws, cfg);
+  rmSync(join(ws, 'src'), { recursive: true });
+  const agentCode = (code: string) => write(ws, 'src/task/index.ts', code);
+  agentCode("import { Button } from '@acme/ui';\nexport const label: string = Button({ label: ' hi ' });\n");
+  symlinkSync(join(PKG_ROOT, 'node_modules'), join(ws, 'node_modules'));
+  const cleanup = () => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(ws, { recursive: true, force: true });
+  };
+  return { root, ws, cfg, agentCode, cleanup };
+}
+
+test('a monorepo sibling resolves through the system tsconfig paths, and fails without them', () => {
+  const { root, ws, cfg, cleanup } = stageMonorepo();
+  try {
+    // Scoped package aliases only: the catch-all, the app-local and the bare alias stay out.
+    assert.deepEqual(systemTsPaths(cfg), { '@acme/*': [join(root, 'packages/*/src')] });
+    const tsconfig = readFileSync(join(ws, 'tsconfig.json'), 'utf8');
+    assert.ok(!tsconfig.includes('__SYSTEM_TS_PATHS__'), 'the placeholder is replaced');
+    assert.match(tsconfig, /"react": \["\.\/node_modules\/@types\/react"\]/, "the template's own entries remain");
+    const tsc = () => {
+      try {
+        execFileSync(join(PKG_ROOT, 'node_modules/.bin/tsc'), ['--noEmit', '-p', join(ws, 'tsconfig.json')], { encoding: 'utf8' });
+        return '';
+      } catch (err) {
+        return String((err as { stdout?: string }).stdout ?? err);
+      }
+    };
+    assert.equal(tsc(), '', 'compiles with the inherited aliases');
+
+    writeFileSync(join(ws, 'tsconfig.json'), tsconfig.replace(/^.*"@acme\/\*".*\n/m, ''));
+    assert.match(tsc(), /packages\/ui\/src\/index\.ts.*TS2307: Cannot find module '@acme\/hooks'/, 'without them: the old failure, in the system source');
+  } finally {
+    cleanup();
+  }
+});
+
+test("errors in the system's own source are setup; only the agent's files gate compile", async () => {
+  // ES2024 Set methods: fine in the system's own build, an error under the fixture's ES2022 lib.
+  const { ws, agentCode, cleanup } = stageMonorepo(
+    'export function useLabel(s: string): string { return [...new Set([s]).union(new Set([s]))].join(""); }\n',
+  );
+  try {
+    const ctx = { workspaceDir: ws } as GradeContext;
+    const clean = await gradeCompile(ctx);
+    assert.equal(clean.gate, 'pass', 'the agent code is fine');
+    assert.equal(clean.diffs.length, 1);
+    assert.match(clean.diffs[0]!.message, /^setup, not the agent: 1 type error.*packages\/hooks\/src\/index\.ts.*union/);
+
+    agentCode("import { Button } from '@acme/ui';\nexport const label: string = Button({ label: 1 });\n");
+    const broken = await gradeCompile(ctx);
+    assert.equal(broken.gate, 'fail');
+    assert.match(broken.diffs[0]!.message, /src\/task\/index\.ts.*TS2322/);
+    assert.ok(broken.diffs.some((d) => d.message.startsWith('setup, not the agent')), 'the setup note stays alongside');
+  } finally {
+    cleanup();
+  }
+});
+
+test('attributeTscErrors splits agent from setup, keeping continuation lines with their error', () => {
+  const ws = '/w/runs/r/cells/c/t/rep1/workspace';
+  const out = [
+    "../../../../../../../../repos/sys/packages/ui/src/x.ts(3,48): error TS2552: Cannot find name 'ReadonlySetLike'.",
+    "src/task/index.tsx(10,5): error TS2322: Type 'number' is not assignable to type 'string'.",
+    "  The expected type comes from property 'label' which is declared here",
+    "error TS2688: Cannot find type definition file for 'foo'.",
+  ].join('\n');
+  const { agent, setup } = attributeTscErrors(out, ws);
+  assert.equal(agent.length, 1);
+  assert.match(agent[0]!, /TS2322[\s\S]*declared here/);
+  assert.equal(setup.length, 2);
 });

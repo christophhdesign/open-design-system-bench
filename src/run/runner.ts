@@ -17,6 +17,7 @@ import type {
   CellRecord,
   CellSpec,
   DimensionResult,
+  JudgeOutput,
   SystemCatalog,
   SystemConfig,
   SystemId,
@@ -30,7 +31,7 @@ import type {
 import { cellKey } from '../types.ts';
 import { loadTasks } from '../tasks/load.ts';
 import { expandMatrix, type MatrixFilters } from './matrix.ts';
-import { provisionWorkspace, prepareTemplate, pruneWorkspace, ensureWorkspaceNodeModules } from './fixture.ts';
+import { provisionWorkspace, prepareTemplate, pruneWorkspace, ensureWorkspaceNodeModules, refreshWorkspaceTsconfig } from './fixture.ts';
 import { collectArtifacts } from './collect.ts';
 import { getAdapter } from '../agents/registry.ts';
 import { UsageLimitError, looksLikeUsageLimit } from '../agents/errors.ts';
@@ -39,8 +40,8 @@ import { estimateApiCostUsd } from '../providers/pricing.ts';
 import { analyzeSource } from '../grade/ast.ts';
 import type { AnalyzedFile, GradeContext, StyleFile } from '../grade/context.ts';
 import { runMechanical, composeResult } from '../grade/score.ts';
-import { judgeArtifact } from '../grade/judge.ts';
-import { buildRunResults } from '../report/aggregate.ts';
+import { judgeArtifact, scoreJudgeOutput } from '../grade/judge.ts';
+import { buildRunResults, isJudgeMissing } from '../report/aggregate.ts';
 import { renderReportHtml } from '../report/html.ts';
 
 const execFileAsync = promisify(execFile);
@@ -144,7 +145,7 @@ export async function gradeCell(opts: {
   judgeSamples: number;
   judgeTimeoutMs: number;
   judgeProvider?: string;
-}): Promise<{ dimensions: DimensionResult[]; judgeRaw?: unknown }> {
+}): Promise<{ dimensions: DimensionResult[]; judgeRaw?: unknown; judgedBy?: CellRecord['judgedBy']; judgeMissing?: string }> {
   const { spec, task, assets } = opts;
   const workspaceDir = join(opts.cellDir, 'workspace');
   const { files, styles } = readCollectedFiles(join(opts.cellDir, 'files'));
@@ -167,31 +168,58 @@ export async function gradeCell(opts: {
     cleanup();
   }
 
-  let judgeRaw: unknown;
-  if (!opts.noJudge) {
-    if (!opts.diffPatch.trim()) {
-      dimensions.push({
+  const judged = await judgeCell({ ...opts, catalog: assets.catalog });
+  if (judged.dimension) dimensions.push(judged.dimension);
+  return { dimensions, judgeRaw: judged.judgeRaw, judgedBy: judged.judgedBy, judgeMissing: judged.judgeMissing };
+}
+
+/** The judgment half of gradeCell, on its own so `judge --missing` can add a verdict without re-running anything else. */
+async function judgeCell(opts: {
+  spec: CellSpec;
+  task: Task;
+  systemsConfig: SystemsConfig;
+  catalog: SystemCatalog;
+  diffPatch: string;
+  noJudge: boolean;
+  judgeModel: string;
+  judgeSamples: number;
+  judgeTimeoutMs: number;
+  judgeProvider?: string;
+}): Promise<{ dimension?: DimensionResult; judgeRaw?: unknown; judgedBy?: CellRecord['judgedBy']; judgeMissing?: string }> {
+  if (opts.noJudge) return { judgeMissing: 'run with --no-judge' };
+  if (!opts.diffPatch.trim()) {
+    return {
+      dimension: {
         dimension: 'judgment',
         score: 0,
         gate: 'review',
         diffs: [{ dimension: 'judgment', message: 'agent produced no changes — nothing to judge' }],
-      });
-    } else {
-      const judge = await judgeArtifact({
-        task,
-        system: spec.system,
-        catalog: assets.catalog,
-        diffPatch: opts.diffPatch,
-        model: opts.judgeModel,
-        timeoutMs: opts.judgeTimeoutMs,
-        samples: opts.judgeSamples,
-        provider: opts.judgeProvider,
-      });
-      dimensions.push(judge.dimension);
-      judgeRaw = { output: judge.output, rawSamples: judge.rawSamples, varianceNote: judge.varianceNote };
-    }
+      },
+    };
   }
-  return { dimensions, judgeRaw };
+  try {
+    const judge = await judgeArtifact({
+      task: opts.task,
+      system: opts.spec.system,
+      catalog: opts.catalog,
+      diffPatch: opts.diffPatch,
+      model: opts.judgeModel,
+      timeoutMs: opts.judgeTimeoutMs,
+      samples: opts.judgeSamples,
+      provider: opts.judgeProvider,
+      systemCfg: opts.systemsConfig[opts.spec.system],
+    });
+    return {
+      dimension: judge.dimension,
+      judgeRaw: { output: judge.output, rawSamples: judge.rawSamples, varianceNote: judge.varianceNote },
+      judgedBy: { model: opts.judgeModel, samples: judge.rawSamples.length, ...(opts.judgeProvider ? { provider: opts.judgeProvider } : {}) },
+    };
+  } catch (err) {
+    // A usage limit pauses the run; any other judge failure keeps the
+    // generation and marks the verdict missing, for `judge --missing`.
+    if (err instanceof UsageLimitError) throw err;
+    return { judgeMissing: `judge failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500) };
+  }
 }
 
 async function pool<T>(
@@ -530,7 +558,7 @@ export async function runBench(
 
   const concurrency = opts.concurrency ?? bench.defaults.concurrency;
   const judgeModel = opts.judgeModel ?? bench.defaults.judgeModel;
-  const judgeSamples = opts.judgeSamples ?? bench.defaults.judgeSamples;
+  const judgeSamples = opts.judgeSamples ?? bench.profiles[manifest.profile]?.judgeSamples ?? bench.defaults.judgeSamples;
   const judgeProvider = opts.judgeProvider ?? bench.defaults.judgeProvider;
 
   let paused = false;
@@ -652,6 +680,8 @@ export async function runBench(
           writeFileSync(join(cellDir, 'judge.json'), JSON.stringify(graded.judgeRaw, null, 2));
           record.artifacts!.judgeJson = join(relCellDir, 'judge.json');
         }
+        if (graded.judgedBy) record.judgedBy = graded.judgedBy;
+        if (graded.judgeMissing) record.judgeMissing = graded.judgeMissing;
         record.result = composeResult(graded.dimensions);
         writeFileSync(join(cellDir, 'grades.json'), JSON.stringify(record.result, null, 2));
       }
@@ -758,6 +788,8 @@ export async function regradeRun(opts: {
   judgeProvider?: string;
   /** --config override: must match the systems config the run was originally produced against. */
   configPath?: string;
+  /** Judge only the ok cells with no verdict (isJudgeMissing); leave every other cell exactly as stored. */
+  missingOnly?: boolean;
 }): Promise<RunResults> {
   const bench = loadBenchConfig();
   const systemsConfigPath = resolveSystemsConfigPath(opts.configPath);
@@ -772,8 +804,14 @@ export async function regradeRun(opts: {
   const prior = JSON.parse(readFileSync(resultsPath, 'utf8')) as RunResults;
   const assetsBySystem = new Map<SystemId, SystemAssets>();
 
+  // Same sample count as the run's own profile unless told otherwise, so a
+  // filled-in cell is judged the way its neighbours were.
+  const judgeSamples = opts.judgeSamples ?? bench.profiles[prior.manifest.profile]?.judgeSamples ?? bench.defaults.judgeSamples;
+  let filled = 0;
+
   for (const record of prior.records) {
     if (record.status !== 'ok' || !record.artifacts) continue;
+    if (opts.missingOnly && !isJudgeMissing(record)) continue;
     const spec: CellSpec = { ...record.cell, taskId: record.taskId, rep: record.rep };
     const task = taskById.get(record.taskId);
     if (!task) continue;
@@ -785,25 +823,48 @@ export async function regradeRun(opts: {
       ? readFileSync(join(opts.runDir, record.artifacts.diffPatch), 'utf8')
       : '';
 
-    const graded = await gradeCell({
+    const judgeOpts = {
       spec,
       task,
       systemsConfig,
-      assets: assetsBySystem.get(spec.system)!,
-      cellDir,
       diffPatch,
       noJudge: !opts.judge,
       judgeModel: opts.judgeModel ?? bench.defaults.judgeModel,
-      judgeSamples: opts.judgeSamples ?? bench.defaults.judgeSamples,
+      judgeSamples,
       judgeProvider: opts.judgeProvider ?? bench.defaults.judgeProvider,
       judgeTimeoutMs: bench.defaults.judgeTimeoutSec * 1_000,
-    });
+    };
+    // Stored code compiles under the current fixture rules, like every other
+    // dimension re-scores under current graders.
+    if (!opts.missingOnly) refreshWorkspaceTsconfig(join(cellDir, 'workspace'), spec.system, systemsConfig[spec.system]);
+    const graded = opts.missingOnly
+      ? await judgeCell({ ...judgeOpts, catalog: assetsBySystem.get(spec.system)!.catalog }).then((j) => ({
+          ...j,
+          // Everything already stored stays exactly as it was.
+          dimensions: [...Object.values(record.result!.dimensions), ...(j.dimension ? [j.dimension] : [])],
+        }))
+      : await gradeCell({ ...judgeOpts, assets: assetsBySystem.get(spec.system)!, cellDir });
+    if (opts.judge) {
+      record.judgedBy = graded.judgedBy;
+      record.judgeMissing = graded.judgeMissing;
+      if (graded.judgedBy) filled += 1;
+    }
     let dimensions = graded.dimensions;
-    if (!opts.judge && record.result?.dimensions['judgment']) {
-      dimensions = [...dimensions, record.result.dimensions['judgment']];
+    if (!opts.judge) {
+      // Replay the stored verdicts through the current scoring rules (withheld
+      // rubrics, claim checks) instead of keeping a stale dimension verbatim.
+      const judgePath = join(cellDir, 'judge.json');
+      const stored = existsSync(judgePath)
+        ? (JSON.parse(readFileSync(judgePath, 'utf8')) as { output?: JudgeOutput }).output
+        : undefined;
+      const judgment = stored
+        ? scoreJudgeOutput({ task, catalog: assetsBySystem.get(spec.system)!.catalog, systemCfg: systemsConfig[spec.system], output: stored, diffPatch })
+        : record.result?.dimensions['judgment'];
+      if (judgment) dimensions = [...dimensions, judgment];
     }
     if (graded.judgeRaw) {
       writeFileSync(join(cellDir, 'judge.json'), JSON.stringify(graded.judgeRaw, null, 2));
+      record.artifacts.judgeJson = join(record.artifacts.dir, 'judge.json');
     }
     record.result = composeResult(dimensions);
     writeFileSync(join(cellDir, 'grades.json'), JSON.stringify(record.result, null, 2));
@@ -812,6 +873,7 @@ export async function regradeRun(opts: {
   const results = buildRunResults(prior.manifest, prior.records);
   writeFileSync(resultsPath, JSON.stringify(results, null, 2));
   writeFileSync(join(opts.runDir, 'report.html'), renderReportHtml(results));
+  if (opts.missingOnly) console.log(`judged ${filled} cell(s) that had no verdict`);
   return results;
 }
 

@@ -5,7 +5,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../config.ts';
-import type { SystemCatalog, SystemId, Task } from '../types.ts';
+import type { SystemCatalog, SystemConfig, SystemId, Task } from '../types.ts';
+import { affordanceNames, withheldRubrics } from './affordances.ts';
 import { parseTask } from './schema.ts';
 
 /**
@@ -27,6 +28,18 @@ export const GENERIC_SYMBOL_ALLOWLIST = ['Text', 'Link', 'Card', 'Icon', 'Form',
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Catalog exports a prompt names as case-insensitive whole words, minus the allowlist (lowercased). */
+export function leakedSymbols(prompt: string, exports: string[], allowlist: ReadonlySet<string>): string[] {
+  return exports.filter(
+    (symbol) => !allowlist.has(symbol.toLowerCase()) && new RegExp(`\\b${escapeRegExp(symbol)}\\b`, 'i').test(prompt),
+  );
+}
+
+/** The global allowlist plus a system's own leakAllowlist, lowercased. */
+export function leakAllowlistFor(cfg?: Pick<SystemConfig, 'leakAllowlist'>): Set<string> {
+  return new Set([...GENERIC_SYMBOL_ALLOWLIST, ...(cfg?.leakAllowlist ?? [])].map((w) => w.toLowerCase()));
 }
 
 /** True when `task` applies to `system` — absent `systems`, or a ['*'] wildcard, means every configured system. */
@@ -58,10 +71,10 @@ export function loadTasks(tasksDir: string = paths.tasksDir): Task[] {
 export function validateTaskSuite(
   tasks: Task[],
   catalogs: Partial<Record<SystemId, SystemCatalog>>,
+  systems: Partial<Record<SystemId, SystemConfig>> = {},
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const allowlist = new Set<string>(GENERIC_SYMBOL_ALLOWLIST.map((w) => w.toLowerCase()));
 
   // (b) duplicate task ids -----------------------------------------------------
   const idCounts = new Map<string, number>();
@@ -86,6 +99,18 @@ export function validateTaskSuite(
     // (e) critical rubrics: warn if a task has none -----------------------------
     if (!task.rubrics.some((r) => r.critical)) {
       warnings.push(`task "${task.id}": no rubric is marked critical`);
+    }
+
+    // (h) a presumed affordance nobody declares names for is a typo, not a gap --
+    for (const r of task.rubrics) {
+      if (!r.presumes) continue;
+      const known = affordanceNames(r.presumes).length > 0 ||
+        Object.values(systems).some((cfg) => cfg && affordanceNames(r.presumes!, cfg).length > 0);
+      if (!known) {
+        errors.push(
+          `task "${task.id}": rubric "${r.id}" presumes unknown affordance "${r.presumes}" (no default names, and no system declares it under "affordances")`,
+        );
+      }
     }
 
     // (g) hiddenExpectations optional: warn (never error) when absent -----------
@@ -113,14 +138,16 @@ export function validateTaskSuite(
       }
 
       // (c) prompt-leak lint: any real export named in the prompt is a leak ------
-      for (const symbol of catalog.allExports) {
-        if (allowlist.has(symbol.toLowerCase())) continue;
-        const wholeWord = new RegExp(`\\b${escapeRegExp(symbol)}\\b`, 'i');
-        if (wholeWord.test(task.prompt)) {
-          errors.push(
-            `task "${task.id}": prompt leaks ${system} component "${symbol}" (case-insensitive whole-word match in prompt text)`,
-          );
-        }
+      for (const symbol of leakedSymbols(task.prompt, catalog.allExports, leakAllowlistFor(systems[system]))) {
+        errors.push(
+          `task "${task.id}": prompt leaks ${system} component "${symbol}" (case-insensitive whole-word match in prompt text; ` +
+            `if the prompt means the ordinary word, add "${symbol}" to ${system}'s "leakAllowlist")`,
+        );
+      }
+
+      // (i) rubrics this system cannot be graded on: withheld, not failed ---------
+      for (const [rubricId, why] of withheldRubrics(task, catalog, systems[system])) {
+        warnings.push(`task "${task.id}": rubric "${rubricId}" is withheld for ${system}: it ${why}`);
       }
 
       // (d) hiddenExpectations.componentsAnyOf symbols must be real exports -------

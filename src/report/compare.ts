@@ -5,6 +5,7 @@
 
 import { recordCostUsd } from '../providers/pricing.ts';
 import type { Gate, RunResults } from '../types.ts';
+import { judgeSetup } from './aggregate.ts';
 import { esc, fmtScore, fmtUsd, fmtTokenPair, jsonScript, page } from './shared.ts';
 
 interface Combo {
@@ -95,6 +96,7 @@ interface RunSummary {
   gateCounts: Record<Gate, number>;
   totalCost: number | null;
   tokenPair: string | null;
+  judge: string;
 }
 
 function summarizeRun(run: RunResults): RunSummary {
@@ -110,7 +112,9 @@ function summarizeRun(run: RunResults): RunSummary {
     inputs.length ? inputs.reduce((s, v) => s + v, 0) : null,
     outputs.length ? outputs.reduce((s, v) => s + v, 0) : null,
   );
-  return { label: run.manifest.label ?? run.runId, overallMean, gateCounts, totalCost, tokenPair };
+  const j = judgeSetup(run.records);
+  const judge = `${j.label}, ${j.judged} of ${j.ok} cells`;
+  return { label: run.manifest.label ?? run.runId, overallMean, gateCounts, totalCost, tokenPair, judge };
 }
 
 function renderSummary(runs: RunResults[]): string {
@@ -122,18 +126,42 @@ function renderSummary(runs: RunResults[]): string {
       <div class="value">${s.overallMean != null ? fmtScore(s.overallMean) : 'n/a'} overall</div>
       <div class="sub">${s.gateCounts.pass} pass &middot; ${s.gateCounts.review} review &middot; ${s.gateCounts.fail} fail</div>
       <div class="sub">${fmtUsd(s.totalCost)}${s.tokenPair ? ` &middot; ${s.tokenPair}` : ''}</div>
+      <div class="sub">judge ${esc(s.judge)}</div>
     </div>`,
     )
     .join('')}</div>`;
 }
 
+/**
+ * Judgment carries most of the agentic variance, so two runs judged with a
+ * different model or sample count are not comparable on that dimension.
+ * One line per run that differs from the first, plus one per run with
+ * cells still missing a verdict.
+ */
+export function judgeMismatchWarnings(runs: RunResults[]): string[] {
+  const setups = runs.map((r) => ({ name: r.manifest.label ?? r.runId, ...judgeSetup(r.records) }));
+  const out: string[] = [];
+  const first = setups[0]!;
+  for (const s of setups.slice(1)) {
+    if (s.label !== first.label) {
+      out.push(`judged differently: ${first.name} (${first.label}) vs ${s.name} (${s.label}); judgment deltas mix judge variance into the comparison`);
+    }
+  }
+  for (const s of setups) {
+    if (s.missing) out.push(`${s.name}: ${s.missing} of ${s.ok} ok cells have no judge verdict (fill with judge --run <dir> --missing)`);
+  }
+  return out;
+}
+
 export function renderCompareHtml(runs: RunResults[]): string {
+  const warnings = judgeMismatchWarnings(runs);
   const runLabels = runs.map((r) => esc(r.manifest.label ?? r.runId)).join(' vs ');
 
   const body = `<main class="wrap">
   <header class="top">
     <h1>Run comparison</h1>
     <p class="lede">${runs.length} run(s): ${runLabels}. Deltas are against the first run listed.</p>
+    ${warnings.length ? `<div class="judge-note"><b>Not like for like</b><ul style="margin:6px 0 0;padding-left:18px">${warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
   </header>
 
   <section>

@@ -1,0 +1,20 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist mono",
+        "createdAt": "2026-10-27T19:11:14.453Z",
+        "reason": "Project house style: presentation/index.html and docs/reports/integrity/*.html set Geist and Geist Mono; designarena-research.html matches them on purpose"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-10-27T19:11:14.527Z",
+        "reason": "Project house style: presentation/index.html and docs/reports/integrity/*.html set Geist and Geist Mono; designarena-research.html matches them on purpose"
+      }
+    ]
+  }
+}

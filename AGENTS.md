@@ -82,6 +82,29 @@ source and is not part of the shipped repo.
   value re-exports (`export { X } from './dir'`), and bare .tsx file modules carrying JSX are all
   covered by the docgen extractor and the export-hygiene check. Directories named `internal` or
   `private` count as deliberate encapsulation, not export-hygiene failures.
+- **Measurement integrity (A1 to A5, 2026-10-27).** A rubric can declare `presumes: <affordance>`
+  (`src/tasks/affordances.ts`, defaults merged with `SystemConfig.affordances`); on a system whose
+  catalog exports none of its names it is withheld, never failed, and `validate-tasks` lists it.
+  `contradictedClaims` in `src/grade/judge.ts` checks every rationale's import and use claims against
+  the diff's added lines and caps a contradicted cell at review; it is deliberately narrow (negated
+  claims skipped, use-claims only for catalog names), because a false flag costs more than a miss.
+  `grade` re-scores stored `judge.json` verdicts under current rules with no model call. Judge
+  provenance lives on each `CellRecord` (`judgedBy`, `judgeMissing`); a judge failure keeps the cell
+  ok and marked missing, `judge --missing` fills only those, and profiles can set `judgeSamples`
+  (`full`: 3). Every workspace gets one shared README from `copyTemplate`, so no fixture tells the
+  agent more than another. `SystemConfig.leakAllowlist` is per system and only ever proposed, never
+  written, by `init`.
+- **Measurement integrity, part two (A6 to A9, 2026-10-27).** The source fixture inherits the
+  scoped package aliases (`@scope/*`) a system's own tsconfigs declare between componentsSrc and the
+  root (`systemTsPaths` in `src/run/fixture.ts`), because a monorepo sibling's workspace link points
+  at built types a source checkout lacks; bare and app-local aliases stay out. `gradeCompile` splits
+  tsc errors with `attributeTscErrors`: in the workspace they are the agent's and gate, outside it
+  (the system's own source under the fixture's compiler options) they are setup and never gate.
+  `grade` refreshes a stored workspace's tsconfig from the current template first. `ci` reports
+  coverage (`ciCoverage`) and is inconclusive on no overlap, a paused or empty run, or coverage
+  under `ci.minCoverage`; a cell is comparable only if both sides were judged or neither was. Lift is
+  paired on system, model and task. The leaderboard ranks within evidence cohorts
+  (`rankingCohorts`) and never across them.
 - **Benchmark core** (inherited, all working): task suite → fixture workspace (git-diff based) →
   agent generation → six graded dimensions (imports, apiFidelity, tokenDiscipline, a11yStatic,
   compile, judgment) → composite score + worst-case gate → self-contained report.html →
@@ -151,7 +174,10 @@ source and is not part of the shipped repo.
   parent directories for CLAUDE.md. Do not swap this for `--restricted`, `--safe-mode` or `--bare`:
   all three also drop the workspace `CLAUDE.md` and `.claude/skills`, which is how the `agents-md`
   and `skill` levels deliver context, so every level would silently measure `bare`. The judge needs
-  no context at all and does use `--safe-mode`.
+  no context at all and does use `--safe-mode`. The excludes cover each ancestor under its real path
+  as well as the given one: Claude Code walks up from the real path, so a `runs/` reached through a
+  symlink (or macOS's `/tmp`) otherwise leaks this repo's CLAUDE.md into every cell, measured
+  2026-10-27.
 - **Finding ids name a cause and stay stable across reports.** That is the whole mechanism by which
   a system's evolution becomes visible. `report --stats --since <previous report>` exists to carry
   them forward; a renamed id silently breaks history.

@@ -9,6 +9,7 @@
 import type { CellRecord, ContextLevel, SystemId, RunResults } from '../types.ts';
 import { cellKey } from '../types.ts';
 import { recordCostUsd } from '../providers/pricing.ts';
+import { isJudgeMissing, judgeSetup } from './aggregate.ts';
 import {
   contextRank,
   esc,
@@ -103,6 +104,7 @@ function renderHeader(results: RunResults): string {
     ? `<div class="meta-item"><div class="label">Total tokens</div><div class="value">${fmtTokens((totalIn ?? 0) + (totalOut ?? 0))}</div><div class="sub">${tokenPair}</div></div>`
     : '';
 
+  const judge = judgeSetup(results.records);
   return `<header class="top">
     <h1>${esc(m.label ?? m.runId)}</h1>
     <div class="meta-grid">
@@ -111,6 +113,7 @@ function renderHeader(results: RunResults): string {
       <div class="meta-item"><div class="label">Wall clock</div><div class="value">${fmtMs(m.wallClockMs)}</div></div>
       <div class="meta-item"><div class="label">Total cost</div><div class="value">${fmtUsd(totalCost)}</div></div>
       ${tokensItem}
+      <div class="meta-item"><div class="label">Judge</div><div class="value">${esc(judge.label)}</div><div class="sub">${judge.judged} of ${judge.ok} ok cells judged${judge.missing ? ` &middot; <b>${judge.missing} missing</b>: judge --run &lt;dir&gt; --missing` : ''}</div></div>
       <div class="meta-item"><div class="label">System commits</div><div class="value" style="font-size:12.5px">${esc(systemCommits)}</div></div>
     </div>
   </header>`;
@@ -160,7 +163,11 @@ function renderRepCard(rec: CellRecord): string {
   const head = `<div class="rep-head">rep ${rec.rep} ${statusChip(rec.status)} ${scoreBit} ${metaBit}</div>`;
 
   const skipNote =
-    rec.status !== 'ok' && rec.skipReason ? `<div class="na">reason: ${esc(rec.skipReason)}</div>` : '';
+    rec.status !== 'ok' && rec.skipReason
+      ? `<div class="na">reason: ${esc(rec.skipReason)}</div>`
+      : isJudgeMissing(rec)
+        ? `<div class="na">no judge verdict${rec.judgeMissing ? `: ${esc(rec.judgeMissing)}` : ''}. Fill it with judge --run &lt;dir&gt; --missing.</div>`
+        : '';
 
   let dimsTable = '';
   let diffsList = '';

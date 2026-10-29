@@ -139,6 +139,9 @@ export function parseTask(yamlText: string, filename: string): Task {
       }
       rubric.critical = r.critical;
     }
+    if (r.presumes !== undefined) {
+      rubric.presumes = expectNonEmptyString(r.presumes, filename, `rubrics[${i}] ("${rid}").presumes`);
+    }
     return rubric;
   });
 

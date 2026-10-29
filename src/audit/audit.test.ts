@@ -324,8 +324,11 @@ test('score assembly computes Lift/Ceiling/Engagement/Vocabulary-behavioral from
     const score = computeAuditScore(checks, run, system);
 
     assert.equal(score.basis, 'full-behavioral');
-    assert.equal(score.lift.raw, 40); // guided mean 80 - bare mean 40
-    assert.equal(score.lift.score, 90); // clamp(50 + 40, 0, 100)
+    // Paired: task-a is the only task run both bare (40) and guided (70).
+    // task-b ran guided only; unpaired, it used to inflate Lift to 80 - 40 = 40.
+    assert.equal(score.lift.raw, 30);
+    assert.equal(score.lift.score, 80); // clamp(50 + 30, 0, 100)
+    assert.match(score.lift.note, /paired over 1 .*1 guided and 0 bare cell\(s\) without a partner/);
     assert.ok(score.ceiling.score !== null && score.ceiling.score > 80); // guided mean 80, 100% non-fail
     assert.ok(score.engagement.score !== null && score.engagement.score < 100); // 1/3 ok cells ignored the system
     assert.equal(score.vocabularyBehavioral.score, 0); // the one hallucination ("Switch") is a lexicon-exact match

@@ -75,22 +75,44 @@ function mean(values: number[]): number | undefined {
   return values.length === 0 ? undefined : values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-/** Lift = mean(guided contexts) - mean(bare), across the run's per-cell aggregates — "the fairest cross-system number" because it's a within-model, within-system delta. */
+/**
+ * Lift = the mean of guided-minus-bare deltas over matched pairs: the same
+ * system, model and task, once bare and once in a guided context. Each pair
+ * counts once, so with two guided contexts a task contributes two deltas.
+ * Pairing is what makes it "a within-model, within-system delta": averaging
+ * all guided cells against all bare cells, as before 2026-10-27, let a task
+ * or model present on only one side move Lift (an easier guided-only task
+ * read as lift). On a balanced matrix the two calculations agree exactly.
+ * Unpaired cells are counted in the note and left out; no pair, no Lift.
+ */
 export function computeLift(run: RunResults | undefined, system: string | undefined): BehavioralSubScore {
   if (!run) return { score: null, note: 'TODO: pass --run <dir> to compute Lift from an actual benchmark run.' };
   const aggregates = filterAggregates(run, system);
-  const bareMean = mean(aggregates.filter((a) => a.context === 'bare').map((a) => a.meanOverall));
-  const guidedMean = mean(aggregates.filter((a) => GUIDED_CONTEXTS.has(a.context)).map((a) => a.meanOverall));
-  if (bareMean === undefined || guidedMean === undefined) {
-    return { score: null, note: `Run has no aggregates for ${bareMean === undefined ? 'bare' : 'a guided'} context${system ? ` (system: ${system})` : ''}. Lift needs both.` };
+  const pairKey = (a: RunResults['aggregates'][number]) => `${a.system}|${a.model}|${a.taskId}`;
+  const bare = new Map(aggregates.filter((a) => a.context === 'bare').map((a) => [pairKey(a), a.meanOverall]));
+  const guided = aggregates.filter((a) => GUIDED_CONTEXTS.has(a.context));
+  const deltas = guided.filter((g) => bare.has(pairKey(g))).map((g) => g.meanOverall - bare.get(pairKey(g))!);
+  const pairedBare = new Set(guided.map(pairKey).filter((k) => bare.has(k)));
+  const unpairedGuided = guided.length - deltas.length;
+  const unpairedBare = [...bare.keys()].filter((k) => !pairedBare.has(k)).length;
+  const unpaired = `${unpairedGuided} guided and ${unpairedBare} bare cell(s) without a partner left out`;
+  if (deltas.length === 0) {
+    return {
+      score: null,
+      note: `No bare and guided cells share a system, model and task${system ? ` (system: ${system})` : ''}; Lift needs matched pairs (${unpaired}).`,
+    };
   }
-  const raw = guidedMean - bareMean;
+  const raw = deltas.reduce((sum, d) => sum + d, 0) / deltas.length;
   // 50 = "guidance had no behavioral effect"; each point of lift/deficit
   // shifts the composite contribution by one point either side, clipped to
   // [0,100]. The raw delta (the actually meaningful number) is reported
   // alongside, never hidden behind the normalization.
   const score = clamp(50 + raw, 0, 100);
-  return { score: round1(score), raw: round1(raw), note: `guided mean ${round1(guidedMean)} - bare mean ${round1(bareMean)} = ${raw >= 0 ? '+' : ''}${round1(raw)} points.` };
+  return {
+    score: round1(score),
+    raw: round1(raw),
+    note: `paired over ${deltas.length} system/model/task pair(s): mean guided-minus-bare ${raw >= 0 ? '+' : ''}${round1(raw)} points; ${unpaired}.`,
+  };
 }
 
 /** Ceiling = "is guided output shippable" — blends guided quality with the guided hard-gate pass rate so a high mean score hiding a high fail rate doesn't read as shippable. */

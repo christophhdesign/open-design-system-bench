@@ -4,9 +4,10 @@
 //
 // Honesty rule inherited from the audit itself: a surface-only composite is a
 // weaker kind of evidence than a behaviorally-grounded one (see
-// computeAuditScore in src/audit/score.ts). Rows are ranked by composite but
-// every row carries its basis label, and the lede says so out loud rather
-// than letting mixed-evidence rows read as one homogeneous ranking.
+// computeAuditScore in src/audit/score.ts), and a partial-behavioral one is
+// assembled from whichever sub-scores the run could supply. Composites built
+// from different ingredients are not one scale, so systems are ranked only
+// within a cohort that shares them; ranks never cross cohorts.
 
 import type { AuditScore } from '../audit/score.ts';
 import type { AuditCheckResult } from '../audit/types.ts';
@@ -108,6 +109,38 @@ function checkColumns(entries: LeaderboardEntry[]): string[] {
   return [...CHECK_ORDER, ...extras];
 }
 
+const BEHAVIORAL = ['lift', 'ceiling', 'engagement', 'vocabularyBehavioral'] as const;
+
+export interface RankingCohort {
+  /** Stable id: the basis, plus the measured sub-scores for a partial one. */
+  key: string;
+  title: string;
+  entries: LeaderboardEntry[];
+}
+
+/**
+ * Entries grouped by what their composite is made of, each group ranked by
+ * composite. Run-backed cohorts come first, the static-only one last.
+ */
+export function rankingCohorts(entries: LeaderboardEntry[]): RankingCohort[] {
+  const cohorts = new Map<string, RankingCohort>();
+  for (const e of rankEntries(entries)) {
+    const s = e.score;
+    const measured = BEHAVIORAL.filter((k) => s[k].score !== null);
+    const key = s.basis === 'partial-behavioral' ? `partial-behavioral:${measured.join('+')}` : s.basis;
+    const title =
+      s.basis === 'surface-only'
+        ? 'Static audit only'
+        : s.basis === 'full-behavioral'
+          ? 'Static audit and a full benchmark run'
+          : `Static audit and a partial run (${measured.map((k) => (k === 'vocabularyBehavioral' ? 'vocabulary' : k)).join(', ')})`;
+    if (!cohorts.has(key)) cohorts.set(key, { key, title, entries: [] });
+    cohorts.get(key)!.entries.push(e);
+  }
+  const order = (k: string) => (k === 'full-behavioral' ? 0 : k === 'surface-only' ? 2 : 1);
+  return [...cohorts.values()].sort((a, b) => order(a.key) - order(b.key) || a.key.localeCompare(b.key));
+}
+
 function renderRankingTable(ranked: LeaderboardEntry[]): string {
   const rows = ranked
     .map((e, i) => {
@@ -127,13 +160,24 @@ ${scoreCell(s.vocabularyBehavioral.score)}
     })
     .join('\n');
 
-  return `<section>
-<h2>Ranking</h2>
-<p class="lede">Ranked by audit composite. "surface-only" rows are scored from static checks alone; behavioral columns (Lift, Ceiling, Engagement, Vocabulary) need a benchmark run and report n/a until one is provided via \`audit --run\`. A surface-only composite and a behavioral composite are different kinds of evidence; the basis column keeps them distinguishable.</p>
-<div class="card"><div class="scroll-x"><table>
+  return `<div class="card"><div class="scroll-x"><table>
 <thead><tr><th>#</th><th>System</th><th>Tier</th><th>Composite</th><th>Basis</th><th>Surface</th><th>Lift</th><th>Ceiling</th><th>Engagement</th><th>Vocabulary</th></tr></thead>
 <tbody>${rows}</tbody>
-</table></div></div>
+</table></div></div>`;
+}
+
+function renderRankings(cohorts: RankingCohort[]): string {
+  if (cohorts.length <= 1) {
+    return `<section>
+<h2>Ranking</h2>
+<p class="lede">Ranked by audit composite. "surface-only" rows are scored from static checks alone; behavioral columns (Lift, Ceiling, Engagement, Vocabulary) need a benchmark run and report n/a until one is provided via \`audit --run\`.</p>
+${renderRankingTable(cohorts[0]?.entries ?? [])}
+</section>`;
+  }
+  return `<section>
+<h2>Rankings</h2>
+<p class="lede">One table per kind of evidence. A composite from static checks alone, one from a full run and one from a partial run are built from different ingredients, so a rank only compares systems inside the same table and never across tables.</p>
+${cohorts.map((c) => `<h3 class="lb-cohort">${esc(c.title)} <span class="lb-basis">${c.entries.length} system(s)</span></h3>\n${renderRankingTable(c.entries)}`).join('\n')}
 </section>`;
 }
 
@@ -190,6 +234,7 @@ td.tone-green .lb-score{color:var(--green)}
 td.tone-yellow .lb-score{color:var(--yellow)}
 td.tone-red .lb-score{color:var(--red)}
 .lb-basis{font-size:11px;color:var(--muted)}
+.lb-cohort{margin:22px 0 10px;font-size:15px}
 .lb-findings{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:8px}
 .lb-findings li{white-space:normal}
 .lb-check{color:var(--accent-ink);font-size:12px}
@@ -197,7 +242,8 @@ td.tone-red .lb-score{color:var(--red)}
 `;
 
 export function renderLeaderboardHtml(entries: LeaderboardEntry[], opts?: { generatedAt?: string }): string {
-  const ranked = rankEntries(entries);
+  const cohorts = rankingCohorts(entries);
+  const ranked = cohorts.flatMap((c) => c.entries);
   const generatedAt = opts?.generatedAt ?? new Date().toISOString();
   const sources = [...new Set(ranked.map((e) => e.source))];
   const bases = new Set(ranked.map((e) => e.score.basis));
@@ -217,12 +263,12 @@ export function renderLeaderboardHtml(entries: LeaderboardEntry[], opts?: { gene
   const body = `<style>${LEADERBOARD_CSS}</style>
 <div class="wrap">
 ${header}
-${renderRankingTable(ranked)}
+${renderRankings(cohorts)}
 ${renderCheckTable(ranked)}
 ${renderFindings(ranked)}
 ${footer}
 </div>
-${jsonScript('leaderboard-data', { generatedAt, entries: ranked })}`;
+${jsonScript('leaderboard-data', { generatedAt, cohorts: cohorts.map((c) => ({ key: c.key, title: c.title, systems: c.entries.map((e) => e.system) })), entries: ranked })}`;
 
   return page('AI-readiness leaderboard', body, '');
 }

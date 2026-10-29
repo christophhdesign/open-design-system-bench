@@ -15,6 +15,11 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
+      // Replaced by the system's own package aliases from its tsconfigs
+      // (systemTsPaths in src/run/fixture.ts), so a monorepo's sibling
+      // packages resolve to source the way they do in the system's own build.
+      // Entries below come later and win on a duplicate key.
+      "__SYSTEM_TS_PATHS__": [],
       // Dedupe React's types to this workspace's single @types/react(-dom)
       // install. The kit is consumed from source and pulls in its own peer
       // "react"/"react-dom" imports from ITS OWN node_modules (a different

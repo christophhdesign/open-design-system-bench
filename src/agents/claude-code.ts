@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { AgentAdapter, AgentGenerateRequest, AgentGenerateResult } from '../types.ts';
@@ -24,11 +24,22 @@ const DISALLOWED_TOOLS = ['WebSearch', 'WebFetch', 'Bash', 'Task', 'NotebookEdit
  */
 export function isolationSettings(workspaceDir: string): { autoMemoryEnabled: false; claudeMdExcludes: string[] } {
   const claudeMdExcludes = [join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), '**')];
-  for (let dir = dirname(resolve(workspaceDir)); ; dir = dirname(dir)) {
-    claudeMdExcludes.push(join(dir, '*.md'), join(dir, '.claude', '**'));
-    if (dirname(dir) === dir) break;
+  // Claude Code walks up from the real path, so an ancestor reached through a
+  // symlink (a runs/ linked to another disk, macOS's /tmp) must be excluded
+  // under its real name too, or that ancestor's CLAUDE.md reaches the cell.
+  const starts = new Set([resolve(workspaceDir)]);
+  try {
+    starts.add(realpathSync(workspaceDir));
+  } catch {
+    /* not provisioned yet: the resolved path is all there is */
   }
-  return { autoMemoryEnabled: false, claudeMdExcludes };
+  for (const start of starts) {
+    for (let dir = dirname(start); ; dir = dirname(dir)) {
+      claudeMdExcludes.push(join(dir, '*.md'), join(dir, '.claude', '**'));
+      if (dirname(dir) === dir) break;
+    }
+  }
+  return { autoMemoryEnabled: false, claudeMdExcludes: [...new Set(claudeMdExcludes)] };
 }
 
 interface StreamResultEvent {

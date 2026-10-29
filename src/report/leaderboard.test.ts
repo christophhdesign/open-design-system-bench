@@ -12,6 +12,7 @@ import type { AuditCheckResult } from '../audit/types.ts';
 import {
   collectLeaderboardEntries,
   rankEntries,
+  rankingCohorts,
   renderLeaderboardHtml,
   type AuditReportFile,
   type LeaderboardEntry,
@@ -159,4 +160,46 @@ test('demo leaderboard is written for a human to open', () => {
   writeFileSync(out, html);
   assert.ok(html.startsWith('<!DOCTYPE html>'));
   console.log(`demo leaderboard: ${out}`);
+});
+
+// ---------------------------------------------------------------------------
+// ranking cohorts: composites from different evidence never share a rank
+// ---------------------------------------------------------------------------
+
+function behavioralEntry(system: string, composite: number, measured: Array<'lift' | 'ceiling' | 'engagement' | 'vocabularyBehavioral'>): LeaderboardEntry {
+  const e = makeEntry(system, composite);
+  const all = ['lift', 'ceiling', 'engagement', 'vocabularyBehavioral'] as const;
+  for (const k of all) e.score[k] = measured.includes(k) ? { score: 60, note: 'measured' } : { score: null, note: 'n/a' };
+  e.score.basis = measured.length === all.length ? 'full-behavioral' : 'partial-behavioral';
+  return e;
+}
+
+test('mixed evidence is ranked in separate cohorts, run-backed first, ranks restarting', () => {
+  const entries = [makeEntry('static-high', 95), behavioralEntry('run-low', 40, ['lift', 'ceiling', 'engagement', 'vocabularyBehavioral']), makeEntry('static-low', 30)];
+  const cohorts = rankingCohorts(entries);
+  assert.deepEqual(cohorts.map((c) => [c.key, c.entries.map((e) => e.system)]), [
+    ['full-behavioral', ['run-low']],
+    ['surface-only', ['static-high', 'static-low']],
+  ]);
+  const html = renderLeaderboardHtml(entries, { generatedAt: '2026-10-27T00:00:00Z' });
+  assert.match(html, /<h2>Rankings<\/h2>/);
+  assert.match(html, /never across tables/);
+  // Both tables start at 1: a 95 static composite does not outrank a 40 run-backed one.
+  assert.equal((html.match(/<td class="num">1<\/td>/g) ?? []).length, 2);
+});
+
+test('partial runs with different sub-scores are different cohorts', () => {
+  const cohorts = rankingCohorts([
+    behavioralEntry('ceiling-only', 70, ['ceiling', 'engagement']),
+    behavioralEntry('with-lift', 60, ['lift', 'ceiling', 'engagement']),
+    behavioralEntry('also-ceiling-only', 50, ['ceiling', 'engagement']),
+  ]);
+  assert.deepEqual(cohorts.map((c) => c.entries.map((e) => e.system)), [['ceiling-only', 'also-ceiling-only'], ['with-lift']]);
+  assert.match(cohorts[0]!.title, /partial run \(ceiling, engagement\)/);
+});
+
+test('a homogeneous leaderboard keeps its single ranking', () => {
+  const html = renderLeaderboardHtml([makeEntry('a', 80), makeEntry('b', 60)], { generatedAt: '2026-10-27T00:00:00Z' });
+  assert.match(html, /<h2>Ranking<\/h2>/);
+  assert.ok(!html.includes('class="lb-cohort"'));
 });

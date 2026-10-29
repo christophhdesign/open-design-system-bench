@@ -69,9 +69,13 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
                               --retry-errored also re-queues timeout/agent-error cells;
                               --wait probes every 10min for renewed usage credits instead of
                               finishing paused, giving up after 8h
-  grade [--run <dir>]         re-run mechanical graders on a stored run (keeps stored judge)
-  judge [--run <dir>] [--judge-model m] [--judge-samples N] [--judge-provider id]
+  grade [--run <dir>]         re-run mechanical graders on a stored run and re-score the stored
+                              judge verdicts under current rules (no model call)
+  judge [--run <dir>] [--missing] [--judge-model m] [--judge-samples N] [--judge-provider id]
                               re-run mechanical graders AND the judge on a stored run.
+                              --missing judges only the ok cells with no verdict (run with
+                              --no-judge, or the judge failed) and leaves the rest as stored.
+                              Samples default to the run's profile (full: 3).
                               --judge-provider routes judging through a configured API
                               provider (bench.config.json "providers") instead of the
                               claude CLI; requires that provider's apiKeyEnv to be set.
@@ -613,7 +617,7 @@ async function cmdDoctor(configPathArg: string | undefined, tasksDirArg: string 
         ? (JSON.parse(readFileSync(catalogPath(system, catalogsDir), 'utf8')) as SystemCatalog)
         : undefined;
     }
-    const res = validateTaskSuite(loadTasks(tasksDir), catalogs);
+    const res = validateTaskSuite(loadTasks(tasksDir), catalogs, systems);
     if (res.errors.length) problems.push(...res.errors.map((e) => `tasks: ${e}`));
     else okLines.push(`task suite valid (${res.warnings.length} warnings)`);
   } catch (err) {
@@ -689,6 +693,7 @@ async function main(): Promise<number> {
       stats: { type: 'boolean' },
       validate: { type: 'string' },
       since: { type: 'string' },
+      missing: { type: 'boolean' },
     },
   });
 
@@ -761,7 +766,7 @@ async function main(): Promise<number> {
           ? (JSON.parse(readFileSync(catalogPath(system, catalogsDir), 'utf8')) as SystemCatalog)
           : undefined;
       }
-      const res = validateTaskSuite(loadTasks(tasksDir), catalogs);
+      const res = validateTaskSuite(loadTasks(tasksDir), catalogs, systems);
       for (const w of res.warnings) console.log(`  warn ${w}`);
       for (const e of res.errors) console.log(`  FAIL ${e}`);
       console.log(res.errors.length ? '\ninvalid task suite' : '\ntask suite ok');
@@ -820,9 +825,14 @@ async function main(): Promise<number> {
         console.error('no run found — pass --run <dir>');
         return 2;
       }
+      if (values.missing && cmd !== 'judge') {
+        console.error('--missing judges cells without a verdict: use it with judge, not grade');
+        return 2;
+      }
       await regradeRun({
         runDir,
         judge: cmd === 'judge',
+        missingOnly: values.missing ?? false,
         judgeModel: values['judge-model'],
         judgeSamples: values['judge-samples'] ? Number(values['judge-samples']) : undefined,
         judgeProvider: values['judge-provider'],
@@ -866,12 +876,13 @@ async function main(): Promise<number> {
     }
 
     case 'compare': {
-      const { renderCompareHtml } = await import('./report/compare.ts');
+      const { renderCompareHtml, judgeMismatchWarnings } = await import('./report/compare.ts');
       if (positionals.length < 2) {
         console.error('compare needs at least two run directories');
         return 2;
       }
       const runs = positionals.map(loadResults);
+      for (const w of judgeMismatchWarnings(runs)) console.warn(`warn ${w}`);
       const out = values.out ?? join(positionals[0], 'compare.html');
       writeFileSync(out, renderCompareHtml(runs));
       console.log(`wrote ${out}`);
@@ -981,6 +992,7 @@ async function main(): Promise<number> {
       const outcome = ciCheck(current, baseline, {
         maxScoreDrop: bench.ci.maxScoreDrop,
         maxErroredCellRatio: bench.ci.maxErroredCellRatio,
+        minCoverage: bench.ci.minCoverage,
         failOn,
       });
       console.log(outcome.summary);

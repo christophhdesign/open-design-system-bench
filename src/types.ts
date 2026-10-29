@@ -136,6 +136,22 @@ export interface SystemConfig {
     placeholderNamed?: string[];
   };
   /**
+   * Export names that provide an affordance a task rubric can presume
+   * (TaskRubric.presumes), merged over conventional defaults in
+   * src/tasks/affordances.ts. Declare only what your system names
+   * differently: `{ "text-input": ["TextEntry"] }`. A rubric whose affordance
+   * matches no export is withheld for this system rather than failed.
+   */
+  affordances?: Record<string, string[]>;
+  /**
+   * Exports of this system that task prompts may use as ordinary English
+   * ("For", "Show", "Notification"), merged over the global leak allowlist
+   * in src/tasks/load.ts for this system only. Every entry weakens the leak
+   * check for this system, so list a word only where the prompt means the
+   * word, not the component. `init` proposes entries; it never adds them.
+   */
+  leakAllowlist?: string[];
+  /**
    * npm install spec for 'npm' consume mode, e.g. "@acme/ui" or
    * "@acme/ui@^2.0.0". Defaults to componentsPkg when omitted. Ignored in
    * 'source' mode.
@@ -225,6 +241,12 @@ export interface TaskRubric {
   text: string;
   weight: number; // rubric weights per task sum to 1
   critical?: boolean; // failed critical rubric → gate 'review'
+  /**
+   * Affordance id the rubric presumes the system provides (e.g. "text-input").
+   * When the system's catalog exports none of its names, the rubric is
+   * withheld for that system and its weight redistributed. See src/tasks/affordances.ts.
+   */
+  presumes?: string;
 }
 
 export interface Task {
@@ -267,6 +289,8 @@ export interface BenchProfile {
   reps: number;
   /** Include tasks/hard/ in a "*" task list. Default false, so the starter suite stays the baseline; `--hard` overrides per run. */
   hard?: boolean;
+  /** Judge samples per cell for this profile, over defaults.judgeSamples; `--judge-samples` overrides both. */
+  judgeSamples?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +343,8 @@ export interface BenchConfig {
   ci: {
     maxScoreDrop: number;
     maxErroredCellRatio: number;
+    /** Least share of comparable cells that must be measured before `ci` gives a regression verdict. Default 0.8. */
+    minCoverage?: number;
   };
 }
 
@@ -424,6 +450,10 @@ export interface CellRecord {
   /** Relative paths within the run dir (diff.patch, transcript.jsonl, judge.json). */
   artifacts?: { dir: string; diffPatch?: string; transcript?: string; judgeJson?: string };
   result?: EvalResult; // absent when status !== 'ok'
+  /** How this cell's verdict was produced. Absent on cells judged before this was recorded. */
+  judgedBy?: { model: string; samples: number; provider?: string };
+  /** Why an ok cell has no verdict (--no-judge, a judge failure). `judge --run <dir> --missing` fills these. */
+  judgeMissing?: string;
 }
 
 export interface RunManifest {

@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { looksLikeUsageLimit, UsageLimitError } from '../agents/errors.ts';
 import { loadBenchConfig } from '../config.ts';
 import { chatComplete, resolveProvider } from '../providers/client.ts';
+import { withheldRubrics } from '../tasks/affordances.ts';
 import type {
   CatalogExport,
   Diff,
@@ -16,6 +17,7 @@ import type {
   JudgeOutput,
   JudgeVerdict,
   SystemCatalog,
+  SystemConfig,
   SystemId,
   Task,
   TaskRubric,
@@ -31,12 +33,15 @@ export interface JudgeRequest {
   samples: number; // ≥1; >1 → majority vote / mean score
   /** Provider id (key into bench.config.json "providers"); unset or 'claude-cli' = the claude CLI judge (default). */
   provider?: string;
+  /** The system's config, for its `affordances` names. Rubrics the system cannot be graded on are withheld. */
+  systemCfg?: SystemConfig;
 }
 
 export interface JudgeResult {
   output: JudgeOutput; // aggregated
   rawSamples: JudgeOutput[];
-  dimension: DimensionResult; // dimension:'judgment'
+  /** dimension:'judgment'. Absent when every rubric is withheld for this system: nothing was graded. */
+  dimension?: DimensionResult;
   varianceNote?: string; // when samples>1 and verdicts disagreed
 }
 
@@ -101,32 +106,33 @@ function truncateDiff(diffPatch: string): string {
 
 /**
  * Pulls named/default import identifiers out of added (`+`) lines of a unified
- * diff. Used only to decide which catalog components are "in play" for this
- * change — results are filtered against catalog.allExports by the caller, so
+ * diff, including imports that span several lines (the usual shape once a
+ * file imports more than a few components). Used to decide which catalog
+ * components are "in play" for this change and to check the judge's import
+ * claims. Callers filter against catalog.allExports where it matters, so
  * false positives (e.g. `import clsx from 'clsx'`) are harmless.
  */
 function extractImportedIdentifiers(diffPatch: string): Set<string> {
   const ids = new Set<string>();
-  const namedImportRe = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"][^'"]+['"]/g;
+  const added = diffPatch
+    .split('\n')
+    .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+    .map((l) => l.slice(1))
+    .join('\n');
+
+  const namedImportRe = /import\s+(?:type\s+)?(?:([A-Za-z_$][\w$]*)\s*,\s*)?\{([^}]*)\}\s*from\s+['"][^'"]+['"]/g;
+  let m: RegExpExecArray | null;
+  while ((m = namedImportRe.exec(added))) {
+    if (m[1]) ids.add(m[1]);
+    for (const part of m[2]!.split(',')) {
+      const name = part.trim().replace(/^type\s+/, '').split(/\s+as\s+/i)[0]?.trim();
+      if (name) ids.add(name);
+    }
+  }
+
   const defaultImportRe = /import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s+from\s+['"][^'"]+['"]/g;
-
-  for (const rawLine of diffPatch.split('\n')) {
-    if (!rawLine.startsWith('+') || rawLine.startsWith('+++')) continue;
-    const line = rawLine.slice(1);
-
-    namedImportRe.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = namedImportRe.exec(line))) {
-      for (const part of m[1].split(',')) {
-        const name = part.trim().split(/\s+as\s+/i)[0]?.trim();
-        if (name) ids.add(name);
-      }
-    }
-
-    defaultImportRe.lastIndex = 0;
-    while ((m = defaultImportRe.exec(line))) {
-      if (m[1]) ids.add(m[1]);
-    }
+  while ((m = defaultImportRe.exec(added))) {
+    if (m[1]) ids.add(m[1]);
   }
 
   return ids;
@@ -187,8 +193,8 @@ function buildCatalogExcerpt(req: JudgeRequest): string {
   ].join('\n');
 }
 
-function buildUserPrompt(req: JudgeRequest): string {
-  const rubricSection = req.task.rubrics
+function buildUserPrompt(req: JudgeRequest, rubrics: TaskRubric[]): string {
+  const rubricSection = rubrics
     .map((r) => `- id: ${r.id}\n  text: ${r.text}`)
     .join('\n');
   const diffSection = truncateDiff(req.diffPatch);
@@ -585,16 +591,114 @@ function aggregateSamples(
   return { output, varianceNote };
 }
 
-function computeDimension(rubrics: TaskRubric[], aggregatedVerdicts: JudgeVerdict[]): DimensionResult {
+// ---------------------------------------------------------------------------
+// Claim check: what the judge says about imports and components vs the diff
+// ---------------------------------------------------------------------------
+
+export interface ContradictedClaim {
+  rubricId: string;
+  name: string;
+  kind: 'import' | 'use';
+  reasoning: string;
+}
+
+const NEGATION = /\b(?:not|never|no|without|instead of|rather than|fails? to|missing|lacks?)\b|n't\b/i;
+const CLAUSE_END = /[.;:!?(]|\s(?:but|rather than|instead of|which|with|from|to|for|that|while|and then)\s|\s[-—]\s/i;
+const IDENT = /`<?\/?([A-Za-z_$][\w$-]*)(?:\(\))?\/?>?`|<([A-Z][\w$]*)|\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)*)\b/g;
+
+function namesIn(span: string): string[] {
+  const out: string[] = [];
+  IDENT.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = IDENT.exec(span))) out.push((m[1] ?? m[2] ?? m[3])!);
+  return out;
+}
+
+function addedLines(diffPatch: string): string[] {
+  return diffPatch.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).map((l) => l.slice(1));
+}
+
+/**
+ * Claims in verdict rationales that the diff contradicts: a name the judge
+ * says is imported that no added import line brings in, or a catalog
+ * component it says is used that no added line mentions. Negated claims
+ * ("does not use X") are skipped, since absence cannot contradict them, and
+ * use-claims are only checked for catalog names, so "uses React state" is
+ * not read as a component claim. Deliberately narrow: a missed contradiction
+ * costs nothing that today's grading does not already cost, a false one caps
+ * a cell for no reason.
+ */
+export function contradictedClaims(output: JudgeOutput, diffPatch: string, catalog: SystemCatalog): ContradictedClaim[] {
+  const added = addedLines(diffPatch);
+  const imported = extractImportedIdentifiers(diffPatch);
+  const exports = new Set(catalog.allExports);
+  // A family name counts when the diff has it as the head of a compound
+  // (`DialogRoot`) or a member access (`Dialog.Root`): "uses the Dialog
+  // components (DialogRoot, ...)" is a true claim about a diff with no bare
+  // `Dialog` in it.
+  const wordIn = (name: string, lines: string[]) => {
+    const re = new RegExp(`(?<![\\w$-])${name.replace(/[$]/g, '\\$')}(?=[A-Z.]|(?![\\w$-]))`);
+    return lines.some((l) => re.test(l));
+  };
+  const isImported = (name: string) =>
+    [...imported].some((i) => i === name || (i.startsWith(name) && /^[A-Z]/.test(i.slice(name.length)))) ||
+    wordIn(name, added.filter((l) => /\bimport\b/.test(l)));
+
+  const out: ContradictedClaim[] = [];
+  const seen = new Set<string>();
+  const flag = (v: JudgeVerdict, name: string, kind: ContradictedClaim['kind']) => {
+    const key = `${v.rubricId}|${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ rubricId: v.rubricId, name, kind, reasoning: v.reasoning });
+  };
+
+  for (const v of output.verdicts) {
+    const text = v.reasoning;
+    // "<X> (component) is imported": the subject sits before the verb.
+    for (const m of text.matchAll(/(`[^`]+`|<?[A-Z][\w$]*>?)\s+(?:components?\s+)?(?:is|are|was|were|gets|got)?\s*imported\b/g)) {
+      const before = text.slice(Math.max(0, m.index! - 30), m.index!);
+      if (NEGATION.test(before)) continue;
+      for (const name of namesIn(m[1]!)) if (!isImported(name)) flag(v, name, 'import');
+    }
+    // "imports / uses / renders <X, Y and Z>": the objects follow the verb.
+    for (const m of text.matchAll(/\b(imports?|importing|imports and uses|uses|using|renders|rendering|builds on|built on|wraps? it in|composes)\s+/gi)) {
+      const before = text.slice(Math.max(0, m.index! - 30), m.index!);
+      if (NEGATION.test(before)) continue;
+      const rest = text.slice(m.index! + m[0].length);
+      const end = rest.search(CLAUSE_END);
+      const span = end === -1 ? rest : rest.slice(0, end);
+      const isImportVerb = /^import/i.test(m[1]!);
+      for (const name of namesIn(span)) {
+        if (isImportVerb) {
+          if (!isImported(name)) flag(v, name, 'import');
+        } else if (exports.has(name) && !wordIn(name, added)) {
+          flag(v, name, 'use');
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function computeDimension(
+  rubrics: TaskRubric[],
+  aggregatedVerdicts: JudgeVerdict[],
+  withheld: Map<string, string>,
+  contradicted: ContradictedClaim[] = [],
+): DimensionResult | undefined {
   const byId = new Map(aggregatedVerdicts.map((v) => [v.rubricId, v]));
   let rawScore = 0;
+  let weightSum = 0;
   let gate: Gate = 'pass';
   const diffs: Diff[] = [];
 
   for (const rubric of rubrics) {
+    if (withheld.has(rubric.id)) continue;
     const v = byId.get(rubric.id);
     const score = v?.score ?? 0;
     rawScore += rubric.weight * score;
+    weightSum += rubric.weight;
 
     const passed = v?.pass ?? false;
     if (!passed) {
@@ -608,12 +712,52 @@ function computeDimension(rubrics: TaskRubric[], aggregatedVerdicts: JudgeVerdic
     }
   }
 
+  // A withheld rubric's weight goes to the rest proportionally, and it can
+  // never gate: the system was not asked a question it can answer.
+  for (const [rubricId, why] of withheld) {
+    diffs.push({
+      dimension: 'judgment',
+      message: `${rubricId} withheld: it ${why}`,
+      fix: 'if the system provides this under another name, list it in systems.config.json "affordances"',
+    });
+  }
+
+  // A rationale the diff contradicts means this verdict cannot be trusted as
+  // it stands: the cell is capped at review and the claim is shown with the
+  // rationale it came from. The score is left alone; a human decides.
+  for (const c of contradicted) {
+    gate = 'review';
+    diffs.push({
+      dimension: 'judgment',
+      message: `judge claim contradicted by the diff: "${c.rubricId}" says ${c.name} is ${c.kind === 'import' ? 'imported' : 'used'}, and no added line ${c.kind === 'import' ? 'imports' : 'mentions'} ${c.name}`,
+      fix: `check this verdict by hand. Rationale: "${c.reasoning}"`,
+    });
+  }
+
+  if (weightSum === 0) return undefined;
   return {
     dimension: 'judgment',
-    score: Math.round(rawScore * 100 * 100) / 100, // 0–100, 2dp
+    score: Math.round((rawScore / weightSum) * 100 * 100) / 100, // 0–100, 2dp
     gate,
     diffs,
   };
+}
+
+/**
+ * The judgment dimension for an aggregated judge output: withholds rubrics the
+ * system cannot be graded on and scores the rest. Pure, so `grade` can replay
+ * stored verdicts (judge.json) through current rules without calling a model.
+ */
+export function scoreJudgeOutput(opts: {
+  task: Task;
+  catalog: SystemCatalog;
+  systemCfg?: SystemConfig;
+  output: JudgeOutput;
+  diffPatch: string;
+}): DimensionResult | undefined {
+  const withheld = withheldRubrics(opts.task, opts.catalog, opts.systemCfg);
+  const contradicted = contradictedClaims(opts.output, opts.diffPatch, opts.catalog);
+  return computeDimension(opts.task.rubrics, opts.output.verdicts, withheld, contradicted);
 }
 
 // ---------------------------------------------------------------------------
@@ -621,8 +765,15 @@ function computeDimension(rubrics: TaskRubric[], aggregatedVerdicts: JudgeVerdic
 // ---------------------------------------------------------------------------
 
 export async function judgeArtifact(req: JudgeRequest): Promise<JudgeResult> {
+  const withheld = withheldRubrics(req.task, req.catalog, req.systemCfg);
+  const rubrics = req.task.rubrics.filter((r) => !withheld.has(r.id));
+  const empty: JudgeOutput = { verdicts: [], overallNotes: '' };
+  if (rubrics.length === 0) {
+    return { output: empty, rawSamples: [], dimension: scoreJudgeOutput({ ...req, output: empty }) };
+  }
+
   const systemPrompt = buildJudgeSystemPrompt(req.system);
-  const userPrompt = buildUserPrompt(req);
+  const userPrompt = buildUserPrompt(req, rubrics);
   const samples = Math.max(1, Math.floor(req.samples));
 
   const useApiProvider = !!req.provider && req.provider !== 'claude-cli';
@@ -632,11 +783,11 @@ export async function judgeArtifact(req: JudgeRequest): Promise<JudgeResult> {
     const raw = useApiProvider
       ? await invokeApiJudge(userPrompt, systemPrompt, req.model, req.provider!, req.timeoutMs)
       : await invokeClaudeJudge(userPrompt, systemPrompt, req.model, req.timeoutMs);
-    rawSamples.push(normalizeJudgeOutput(raw, req.task.rubrics));
+    rawSamples.push(normalizeJudgeOutput(raw, rubrics));
   }
 
-  const { output, varianceNote } = aggregateSamples(rawSamples, req.task.rubrics);
-  const dimension = computeDimension(req.task.rubrics, output.verdicts);
+  const { output, varianceNote } = aggregateSamples(rawSamples, rubrics);
+  const dimension = scoreJudgeOutput({ task: req.task, catalog: req.catalog, systemCfg: req.systemCfg, output, diffPatch: req.diffPatch });
 
   return { output, rawSamples, dimension, varianceNote };
 }

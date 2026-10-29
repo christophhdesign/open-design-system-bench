@@ -2,6 +2,47 @@
 
 What changed in open-design-system-bench, newest first. The project is GitHub-first (clone and run, no npm package), so dates are the record rather than published versions.
 
+## Unreleased: measurement integrity
+
+The nine instrument fixes the roadmap put ahead of any new measurement, each measured on its own with a cheap model before the next landed. Expect judgment scores to move on systems missing a presumed component, Mantine-style monorepos to stop failing `compile`, `ci` to answer inconclusive where it used to pass on no data, and Lift to move on unbalanced runs. Set a new baseline before comparing against older runs.
+
+### Added
+
+- **Rubrics that know the catalog.** A rubric can declare `presumes: <affordance>`; on a system whose catalog exports none of the affordance's names (`src/tasks/affordances.ts`, extended per system by `SystemConfig.affordances`) it is withheld rather than failed, its weight goes to the other rubrics, report.html says why, and `validate-tasks` lists it. `password-visibility`'s critical `builtin-affordance` rubric presumes `text-input`.
+- **Judge claims checked against the diff.** A rationale that says a name is imported, or a catalog component is used, when no added line supports it caps the cell at review and is shown with the rationale. Narrow by design: negated claims and non-catalog names are skipped.
+- **`judge --run <dir> --missing`** judges only the ok cells with no verdict and leaves every other cell, including the filled cells' mechanical scores, as stored.
+- **Per-profile `judgeSamples`.** The `full` profile takes three judge samples per cell. Each cell records `judgedBy` or `judgeMissing`; report.html prints the judge and its coverage; `compare` warns when two runs were judged differently.
+- **Per-system `leakAllowlist`**, merged over the global list for that system only. `validate-tasks` names the word to add on each leak failure, and `init` proposes entries from the barrel without writing them.
+
+### Changed
+
+- `grade` re-scores stored `judge.json` verdicts under current rules instead of keeping the stored judgment dimension verbatim. No model call.
+- Every workspace gets one shared `README.md` (where to work, nothing about the design system) and a template's own README is replaced, so source and npm fixtures show the agent the same text. `fixtures/npm-app/README.md` is gone.
+- A judge failure other than a usage limit keeps the cell ok and marks the verdict missing, instead of discarding the generation as an agent error.
+
+- **`ci` needs measured overlap.** It reports matched, unmeasured and new cells, compares only cells
+  scored on the same basis on both sides (judged on both, or on neither), and returns inconclusive
+  (exit 3) for no overlap, a paused or empty run, or coverage under `ci.minCoverage` (default 0.8,
+  new in `bench.config.json`). Before, a run sharing no cell with its baseline printed PASS.
+- **Paired Lift.** Lift is the mean guided-minus-bare delta over pairs of the same system, model and
+  task, with unpaired cells counted and left out, and no Lift without a pair. Balanced runs score
+  exactly as before; unbalanced ones move, and the old calculation could read a guided-only task or
+  model as lift.
+- **Leaderboard cohorts.** Static-only, full-run and partial-run composites are ranked in separate
+  tables, so a static composite no longer outranks a run-backed one on a different scale.
+
+### Fixed
+
+- **Mantine-style monorepos compiled every cell as a failure.** The source fixture now inherits the
+  scoped package aliases a system's own tsconfigs declare, so sibling packages (`@mantine/hooks`)
+  resolve to source instead of to built types a checkout does not have, and `compile` only fails on
+  errors in the agent's own files. Errors inside the system's source, compiled under the fixture's
+  compiler options, are reported as setup. `grade` refreshes a stored workspace's tsconfig so old
+  runs re-grade under the fixed fixture. Every Mantine cell, including the September demo run's,
+  had failed `compile` with no error in the agent's code.
+- **Cell isolation through symlinks.** Claude Code walks up from a workspace's real path; the harness excluded ancestors only under the path it was given, so a `runs/` reached through a symlink (or macOS's `/tmp`) let this repo's CLAUDE.md into every cell. Ancestors are now excluded under both names.
+- The judge's import parser read only single-line imports, so components imported in a multi-line block were missing from the judge's API-reference excerpt.
+
 ## 1.3.0, 2026-10-05
 
 Field feedback from running the audit and smoke tests against a production React system built with Vite, plus the tooling asked for at the talk: a screenshot gallery, hard tasks, and a bare run that is really bare.
