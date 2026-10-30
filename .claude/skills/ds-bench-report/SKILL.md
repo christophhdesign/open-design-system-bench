@@ -55,6 +55,18 @@ npx tsx src/cli.ts report --validate docs/reports/<system-id>/<date>-<profile>.r
 
 Exit 0 means done. Fix what it names and run it again.
 
+**5. Render the PDF (optional, after validation is clean).**
+
+```bash
+npx tsx src/cli.ts report --pdf docs/reports/<system-id>/<date>-<profile>.report.md
+```
+
+This validates again and refuses on any error, then writes the PDF next to the markdown. It
+needs headless Chrome (the same binary the gallery uses); without one it writes the print HTML
+instead and exits 2, which is an environment note, not a report problem. Note that a finished
+`run` already wrote an instant `report-<system>.pdf` into the run dir: that one is computed
+from run data only and carries no findings, so never circulate it in place of the authored PDF.
+
 ## When a gate fires
 
 - **G3 generated** - you edited a computed block. Re-run `--stats` and paste it again. Do not hand-edit.

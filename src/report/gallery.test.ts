@@ -209,6 +209,7 @@ test('page is self-contained, loadGalleryRun round-trips results.json, demo page
   const html = render([dir], outDir);
   assert.ok(html.startsWith('<!DOCTYPE html>'));
   assert.match(html, /<title>UI gallery · run-self<\/title>/);
+  assert.match(html, /by open-design-system-bench v1\.5/);
   for (const pattern of FORBIDDEN_PATTERNS) {
     assert.ok(!html.includes(pattern), `gallery html should not contain ${JSON.stringify(pattern)}`);
   }

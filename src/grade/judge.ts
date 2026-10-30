@@ -640,8 +640,15 @@ export function contradictedClaims(output: JudgeOutput, diffPatch: string, catal
     const re = new RegExp(`(?<![\\w$-])${name.replace(/[$]/g, '\\$')}(?=[A-Z.]|(?![\\w$-]))`);
     return lines.some((l) => re.test(l));
   };
+  // "imports only React hooks" names the package, not a component: a name
+  // that matches a segment of an imported module specifier ('react',
+  // '@mantine/core') is supported by that import.
+  const specifierParts = new Set(
+    [...added.join('\n').matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].flatMap((m) => m[1]!.toLowerCase().split(/[@/]/).filter(Boolean)),
+  );
   const isImported = (name: string) =>
     [...imported].some((i) => i === name || (i.startsWith(name) && /^[A-Z]/.test(i.slice(name.length)))) ||
+    specifierParts.has(name.toLowerCase()) ||
     wordIn(name, added.filter((l) => /\bimport\b/.test(l)));
 
   const out: ContradictedClaim[] = [];

@@ -205,6 +205,13 @@
         "maxOverall": { "$ref": "#/$defs/score" },
         "gateCounts": { "$ref": "#/$defs/gateCounts" },
         "perfectCells": { "type": "integer", "minimum": 0 },
+        "mechanicalComposite": {
+          "description": "Mean per-cell mechanical composite (judgment removed, weights renormalized). Null when no cell carries a mechanical dimension.",
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "mechanicallyPerfectCells": { "type": "integer", "minimum": 0 },
         "costUsd": { "type": ["number", "null"] },
         "wallClockMs": { "type": ["number", "null"] },
         "inputTokens": { "type": ["integer", "null"] },
@@ -221,7 +228,8 @@
               "cellCount": { "type": "integer", "minimum": 0 },
               "meanOverall": { "$ref": "#/$defs/score" },
               "dimensionMeans": { "$ref": "#/$defs/dimensionMeans" },
-              "gateCounts": { "$ref": "#/$defs/gateCounts" }
+              "gateCounts": { "$ref": "#/$defs/gateCounts" },
+              "mechanicalComposite": { "type": ["number", "null"], "minimum": 0, "maximum": 100 }
             }
           }
         }

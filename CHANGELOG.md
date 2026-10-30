@@ -2,6 +2,13 @@
 
 What changed in open-design-system-bench, newest first. The project is GitHub-first (clone and run, no npm package), so dates are the record rather than published versions.
 
+## Unreleased: PDF reports
+
+### Added
+
+- **PDF reports in two flavors.** `report --pdf --run <dir>` renders an instant PDF computed from run data only (cover, contents, executive headline, methodology, axis primer, results by context and by task, the AI-Readiness audit, validity limits derived from the run's shape, the coverage list with every owed item marked unaddressed, and all-cells and reproducing appendices). `report --pdf <report.md>` renders an authored written report, validated first and refused on any validation error, with a runs-in-scope table when the report carries supporting runs. A finished `run` writes the instant PDF automatically, one `report-<system>.pdf` per system; a paused run defers it to the resume that finishes it, `--no-pdf` skips it, and a PDF failure warns without ever changing the run's exit code. Printing reuses the gallery's headless Chrome (no new dependency); without Chrome the print HTML is written next to the target instead. Gallery screenshots that already exist are embedded in an appendix; the PDF never builds or screenshots anything itself. Chrome cannot print a footer with page numbers, so the contents lists sections without page numbers: a deliberate v1 trade.
+- **Mechanical composite and by-task-by-context aggregates in `report --stats`.** The weighted mean of the five mechanical dimensions with judgment removed and weights renormalized (per cell, then averaged, overall and per context), the count of mechanically perfect cells, and mean overall per task, context and model are now computed once in `src/report/stats.ts`, added to the numbers prose may quote, and emitted in the generated front matter (`mechanicalComposite`, `mechanicallyPerfectCells`; the schema gained both as optional fields). Every surface (markdown, HTML, PDF) reads the same values.
+
 ## Unreleased: measurement integrity
 
 The nine instrument fixes the roadmap put ahead of any new measurement, each measured on its own with a cheap model before the next landed. Expect judgment scores to move on systems missing a presumed component, Mantine-style monorepos to stop failing `compile`, `ci` to answer inconclusive where it used to pass on no data, and Lift to move on unbalanced runs. Set a new baseline before comparing against older runs.

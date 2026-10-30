@@ -8,8 +8,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { recordCostUsd } from '../providers/pricing.ts';
+import { BENCH_VERSION } from '../version.ts';
 import type { CellRecord, Gate, RunResults } from '../types.ts';
-import { contextRank, esc, fmtDate, fmtUsd, page, statusChip } from './shared.ts';
+import { contextRank, esc, fmtDate, fmtUsd, page, scoreBar, statusChip } from './shared.ts';
 
 export interface GalleryRun {
   runDir: string;
@@ -106,7 +107,8 @@ interface RowKey {
 
 function renderRow(run: GalleryRun, taskId: string, key: RowKey, recs: CellRecord[], labels: { model: boolean; system: boolean }, outDir: string): string {
   const scored = recs.filter((r) => r.result);
-  const mean = scored.length > 0 ? f2(scored.reduce((s, r) => s + r.result!.overall, 0) / scored.length) : 'n/a';
+  const meanValue = scored.length > 0 ? scored.reduce((s, r) => s + r.result!.overall, 0) / scored.length : null;
+  const mean = meanValue != null ? f2(meanValue) : 'n/a';
   const counts: Record<Gate, number> = { pass: 0, review: 0, fail: 0 };
   for (const r of scored) counts[r.result!.gate]++;
   const sub = [labels.model ? key.model : '', labels.system ? key.system : ''].filter(Boolean);
@@ -116,6 +118,7 @@ function renderRow(run: GalleryRun, taskId: string, key: RowKey, recs: CellRecor
     ${sub.map((s) => `<div class="sub">${esc(s)}</div>`).join('')}
     <div class="mean"><span class="mean-val">${mean}</span><span class="mean-cap">mean of ${scored.length} shown</span></div>
     <div class="gates">${gateChips(counts)}</div>
+    ${scoreBar(meanValue)}
   </div>
   <div class="gcards">${recs.map((r) => renderCard(run, r, outDir)).join('\n')}</div>
 </div>`;
@@ -149,13 +152,13 @@ ${rows.length > 0 ? rows.join('\n') : '<p class="na">no cells for this task in t
 const GALLERY_CSS = `
 [hidden]{display:none!important}
 .wrap.gallery{max-width:none;padding-top:8px}
-.gbar{position:sticky;top:0;z-index:10;background:var(--bg);border-bottom:1px solid var(--border);padding:10px 28px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
+.gbar{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--border);box-shadow:0 1px 8px rgb(22 35 61/.07);padding:10px 28px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px}
 .gbar h1{font-size:18px;font-weight:700}
 .gbar .gmeta{color:var(--muted);font-family:var(--font-mono);font-size:12px}
 .gbar .gctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;font-size:13px}
 .gbar label{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
-.gbar select,.gbar input{color-scheme:dark;font:inherit;color:var(--ink)}
-.gbar select{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-sm);padding:3px 6px}
+.gbar select,.gbar input{color-scheme:light dark;font:inherit;color:var(--ink)}
+.gbar select{background:var(--surface-3);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:3px 6px}
 .gtask>h2{font-size:20px}
 .gtask .tid{font-family:var(--font-mono);font-size:12px;font-weight:400;color:var(--muted);margin-left:6px}
 .gtask .prompt{color:var(--muted);max-width:100ch;white-space:pre-wrap;margin:6px 0 16px;font-size:13.5px}
@@ -167,9 +170,9 @@ const GALLERY_CSS = `
 .glabel .mean-cap{color:var(--muted);font-size:11px}
 .glabel .gates{display:flex;flex-wrap:wrap;gap:4px}
 .gcards{flex:1 1 0;min-width:0;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
-.gcard{width:min(var(--card-w,320px),100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden}
-.gcard.gate-fail{border-color:var(--red)}
-.gcard.gate-review{border-color:var(--yellow)}
+.gcard{width:min(var(--card-w,320px),100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);box-shadow:var(--shadow);overflow:hidden}
+.gcard.gate-fail{border-color:color-mix(in srgb,var(--red) 55%,transparent)}
+.gcard.gate-review{border-color:color-mix(in srgb,#D97706 55%,transparent)}
 .gcard .ghead{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 10px;font-size:13px}
 .gcard .rep{font-family:var(--font-mono);font-weight:600}
 .gcard .score{font-family:var(--font-mono);font-weight:700;margin-right:4px}
@@ -223,6 +226,15 @@ const GALLERY_SCRIPT = `
       });
       row.querySelector('.mean-val').textContent = n > 0 ? (sum / n).toFixed(2) : 'n/a';
       row.querySelector('.mean-cap').textContent = 'mean of ' + n + ' shown';
+      var bar = row.querySelector('.score-bar');
+      if (bar) {
+        if (n > 0) {
+          var v = sum / n;
+          bar.style.display = '';
+          bar.className = 'score-bar ' + (v >= 85 ? 'tone-green' : v >= 60 ? 'tone-yellow' : 'tone-red');
+          if (bar.firstElementChild) bar.firstElementChild.style.width = v + '%';
+        } else { bar.style.display = 'none'; }
+      }
       row.querySelector('.gates').innerHTML = ['pass', 'review', 'fail'].filter(function (g) { return counts[g] > 0; })
         .map(function (g) { return '<span class="chip chip-' + g + '">' + counts[g] + ' ' + g + '</span>'; }).join(' ');
     });
@@ -266,7 +278,7 @@ export function renderGalleryHtml(runs: GalleryRun[], opts: { outDir: string; ge
 </header>
 <main class="wrap gallery">
 ${sections.length > 0 ? sections.join('\n') : '<p class="na">no cell records in this run</p>'}
-<footer class="foot">generated ${esc(fmtDate(opts.generatedAt ?? new Date().toISOString()))}</footer>
+<footer class="foot">generated ${esc(fmtDate(opts.generatedAt ?? new Date().toISOString()))} by open-design-system-bench ${BENCH_VERSION}</footer>
 </main>`;
   return page(`UI gallery · ${runs.map((r) => r.results.runId).join(', ')}`, body, GALLERY_SCRIPT);
 }

@@ -350,6 +350,32 @@ Commit `reports/` and the history lives in git.
 - [`docs/reports/report-example.md`](docs/reports/report-example.md) is a complete worked example.
 - `.claude/skills/ds-bench-report/` drives the authoring agent in Claude Code.
 
+### PDF reports
+
+The written report also renders to a paged PDF in the house style of the reference reports
+(A4, cover with a metadata table, contents, hairline tables). There are two flavors, and the
+cover of each says which one it is:
+
+```bash
+# instant: computed from run data only, no authored findings
+npx tsx src/cli.ts report --pdf --run runs/<id> [--system <id>] [--out <file>]
+
+# authored: a written report, validated first and refused on any validation error
+npx tsx src/cli.ts report --pdf docs/reports/<system-id>/<date>-<profile>.report.md
+```
+
+A finished `run` writes the instant PDF automatically (one `report-<system>.pdf` per system in
+the run dir; a paused run defers it to the resume that finishes it, and `--no-pdf` skips it).
+A PDF problem never fails a run: it warns, because the benchmark itself succeeded. The instant
+flavor prints the coverage list with every owed item marked unaddressed, so the absence of
+findings is never read as the absence of problems. Screenshots the gallery already took are
+embedded in an appendix; the PDF never builds or screenshots anything itself.
+
+Printing uses the same headless Chrome the gallery locates (or `CHROME_PATH`). Without one,
+the command writes the print HTML next to the target PDF and says so (exit 2 for an explicit
+request). One pagination trade-off is deliberate: Chrome cannot print a footer with page
+numbers, so the contents lists sections without page numbers.
+
 ## Benchmarks & CI
 
 ```bash

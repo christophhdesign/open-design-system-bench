@@ -31,6 +31,10 @@ npx tsx src/cli.ts report --stats --run runs/<run-id> --system <system-id> \
 
 # 3. Check it. Loop until it exits 0.
 npx tsx src/cli.ts report --validate docs/reports/<system-id>/<date>-<profile>.report.md
+
+# 4. Optional: render the validated report to a paged PDF (validates again,
+#    refuses on any error, writes the PDF next to the markdown).
+npx tsx src/cli.ts report --pdf docs/reports/<system-id>/<date>-<profile>.report.md
 ```
 
 `--stats` prints four things: the computed front matter, the generated sections, the coverage list,

@@ -80,6 +80,17 @@ Global options (accepted by doctor, extract, validate-tasks, run, grade, judge, 
                               provider (bench.config.json "providers") instead of the
                               claude CLI; requires that provider's apiKeyEnv to be set.
   report [--run <dir>]        regenerate report.html from results.json
+  report --pdf [--run <dir>] [--system <id>] [--out <file>]
+                              render an instant PDF report (computed from run data
+                              only, no authored findings) as report-<system>.pdf in
+                              the run dir, one per system. Needs Chrome, Chromium or
+                              Edge (CHROME_PATH overrides); without one the print
+                              HTML is written next to the target and the command
+                              exits 2. A finished run does this automatically;
+                              pass --no-pdf to run to skip it.
+  report --pdf <report.md> [--out <file>]
+                              render an authored written report to PDF. The report
+                              is validated first and refused on any validation error.
   report --stats [--run <dir>] [--system <id>] [--since <report.md>] [--out <file>]
                               compute every number an AI-readiness report needs and emit it as
                               paste-ready markdown: front matter, the generated sections, the
@@ -495,6 +506,140 @@ async function cmdReportValidate(opts: { filePath: string; configPathArg?: strin
   return 0;
 }
 
+/**
+ * Generates one instant PDF per system in a run. Shared by the explicit
+ * `report --pdf --run` command and the automatic post-run hook: the caller
+ * decides what a failure means (an explicit request exits 2 without Chrome;
+ * the post-run hook only warns, because a rendering problem must never
+ * reclassify a finished benchmark run).
+ */
+async function generateRunPdfs(opts: {
+  runDir: string;
+  systemArg?: string;
+  configPathArg?: string;
+  outArg?: string;
+}): Promise<{ generated: string[]; failures: string[] }> {
+  const { buildInstantPdfModel } = await import('./report/pdf-model.ts');
+  const { collectExistingScreenshots, writePdf } = await import('./report/pdf.ts');
+  const generated: string[] = [];
+  const failures: string[] = [];
+
+  let run: RunResults;
+  try {
+    run = loadResults(opts.runDir);
+  } catch (err) {
+    return { generated, failures: [`failed to read ${join(opts.runDir, 'results.json')}: ${err instanceof Error ? err.message : err}`] };
+  }
+  const systems = opts.systemArg
+    ? [opts.systemArg as SystemId]
+    : [...new Set(run.records.map((r) => r.cell.system))];
+  if (systems.length === 0) return { generated, failures: [`run ${run.runId} has no cell records`] };
+  if (opts.outArg && systems.length > 1) {
+    return { generated, failures: [`--out names one file but the run covers ${systems.length} systems (${systems.join(', ')}); pass --system or drop --out`] };
+  }
+
+  for (const system of systems) {
+    const ctx = await buildStatsContext(opts.runDir, system, opts.configPathArg);
+    if (!ctx.ok) {
+      failures.push(`${system}: ${ctx.message}`);
+      continue;
+    }
+    const model = buildInstantPdfModel(ctx.stats, ctx.run, {
+      screenshots: collectExistingScreenshots(ctx.run, opts.runDir, system),
+    });
+    const pdfPath = opts.outArg ?? join(opts.runDir, `report-${system}.pdf`);
+    const outcome = await writePdf(model, pdfPath);
+    if (outcome.ok) generated.push(outcome.pdfPath);
+    else failures.push(`${system}: ${outcome.message} (print HTML: ${outcome.htmlPath})`);
+  }
+  return { generated, failures };
+}
+
+/**
+ * `report --pdf <report.md>`: the authored flavor. Validation is not
+ * optional here - a PDF is the document a team circulates, so it only ever
+ * renders from a report that passes every gate. The run the report names
+ * as primary must still exist, because the generated sections and the
+ * headline table are re-rendered from it.
+ */
+async function cmdReportPdfAuthored(opts: {
+  filePath: string;
+  configPathArg?: string;
+  outArg?: string;
+}): Promise<number> {
+  const { loadReportSchema, parseReportFrontMatter, splitSections, validateReport, ReportParseError } =
+    await import('./report/document.ts');
+  const { buildAuthoredPdfModel } = await import('./report/pdf-model.ts');
+  const { collectExistingScreenshots, writePdf } = await import('./report/pdf.ts');
+
+  if (!existsSync(opts.filePath)) {
+    console.error(`report not found: ${opts.filePath}`);
+    return 2;
+  }
+  const markdown = readFileSync(opts.filePath, 'utf8');
+
+  let parsed;
+  try {
+    parsed = parseReportFrontMatter(markdown, opts.filePath);
+  } catch (err) {
+    if (err instanceof ReportParseError) {
+      console.error(err.message);
+      return 1;
+    }
+    throw err;
+  }
+  const fm = parsed.frontMatter as {
+    subject?: { systemId?: string };
+    provenance?: { runs?: Array<{ runId?: string; role?: string }> };
+  };
+  const primaryRunId = fm.provenance?.runs?.find((r) => r.role === 'primary')?.runId;
+  const systemId = fm.subject?.systemId;
+  if (!primaryRunId || !systemId) {
+    console.error('report front matter must name a primary run and subject.systemId before it can be rendered');
+    return 1;
+  }
+  const runDir = join(paths.runsDir, primaryRunId);
+  if (!existsSync(join(runDir, 'results.json'))) {
+    console.error(`primary run ${primaryRunId} no longer exists under ${paths.runsDir}; an authored PDF re-renders its generated sections from the run, so it cannot be produced without it`);
+    return 2;
+  }
+  const ctx = await buildStatsContext(runDir, systemId, opts.configPathArg);
+  if (!ctx.ok) {
+    console.error(ctx.message);
+    return ctx.code;
+  }
+
+  const result = validateReport({
+    filename: opts.filePath,
+    markdown,
+    schema: loadReportSchema(paths.reportSchema),
+    context: { stats: ctx.stats, run: ctx.run, generatedFrontMatter: ctx.generatedFrontMatter },
+    sourceRoots: [ctx.systemRoot, PKG_ROOT],
+    catalog: ctx.catalog,
+    prior: null,
+  });
+  for (const w of result.warnings) console.log(`  warn  [${w.gate}] ${w.message}`);
+  if (result.errors.length > 0) {
+    for (const e of result.errors) console.error(`  FAIL  [${e.gate}] ${e.message}`);
+    console.error(`\n${opts.filePath}: ${result.errors.length} validation error(s); refusing to render an invalid report to PDF`);
+    return 1;
+  }
+
+  const { slices } = splitSections(parsed.body);
+  const doc = parsed.frontMatter as Parameters<typeof buildAuthoredPdfModel>[2];
+  const model = buildAuthoredPdfModel(ctx.stats, ctx.run, doc, slices, {
+    screenshots: collectExistingScreenshots(ctx.run, runDir, systemId),
+  });
+  const pdfPath = opts.outArg ?? opts.filePath.replace(/\.report\.md$/i, '.report.pdf').replace(/\.md$/i, '.pdf');
+  const outcome = await writePdf(model, pdfPath);
+  if (!outcome.ok) {
+    console.error(`pdf: ${outcome.message} (print HTML: ${outcome.htmlPath})`);
+    return 2;
+  }
+  console.log(`wrote ${outcome.pdfPath}`);
+  return 0;
+}
+
 async function cmdDoctor(configPathArg: string | undefined, tasksDirArg: string | undefined): Promise<number> {
   const problems: string[] = [];
   const warnings: string[] = [];
@@ -691,6 +836,8 @@ async function main(): Promise<number> {
       verbose: { type: 'boolean' },
       offline: { type: 'boolean' },
       stats: { type: 'boolean' },
+      pdf: { type: 'boolean' },
+      'no-pdf': { type: 'boolean' },
       validate: { type: 'string' },
       since: { type: 'string' },
       missing: { type: 'boolean' },
@@ -808,8 +955,20 @@ async function main(): Promise<number> {
         label: values.label,
       });
       // On a paused finish, runBench already printed the done/pending summary
-      // and the exact resume command — nothing more to add here.
+      // and the exact resume command — nothing more to add here. The PDF is
+      // deferred with the run: it is generated by the resume that finishes it.
       if (paused) return 3;
+      // The instant PDF is part of a finished run's artifacts. A rendering
+      // failure warns and never changes the run's exit code: the benchmark
+      // succeeded, and reclassifying it over a missing Chrome would be a
+      // lie about the measurement.
+      if (values['no-pdf']) {
+        console.log('pdf: skipped (--no-pdf)');
+      } else {
+        const pdfRes = await generateRunPdfs({ runDir, configPathArg: values.config });
+        for (const p of pdfRes.generated) console.log(`pdf: ${p}`);
+        for (const f of pdfRes.failures) console.warn(`pdf warn: ${f}`);
+      }
       const ok = results.records.filter((r) => r.status === 'ok').length;
       const bad = results.records.filter((r) => r.status === 'agent-error' || r.status === 'timeout').length;
       console.log(`\nrun ${results.runId}: ${ok} ok, ${bad} errored, ${results.records.length - ok - bad} skipped`);
@@ -852,6 +1011,13 @@ async function main(): Promise<number> {
         return cmdReportValidate({ filePath, configPathArg: values.config, sinceArg: values.since });
       }
 
+      // Authored PDF: `report --pdf <report.md>` validates, then renders the
+      // written report. It does not need --run: the report names its runs.
+      if (values.pdf) {
+        const mdArg = positionals.find((p) => p.endsWith('.md'));
+        if (mdArg) return cmdReportPdfAuthored({ filePath: mdArg, configPathArg: values.config, outArg: values.out });
+      }
+
       const { latestRunDir } = await import('./run/runner.ts');
       const runDir = values.run ?? latestRunDir();
       if (!runDir) {
@@ -867,6 +1033,18 @@ async function main(): Promise<number> {
           sinceArg: values.since,
           outArg: values.out,
         });
+      }
+
+      if (values.pdf) {
+        const pdfRes = await generateRunPdfs({
+          runDir,
+          systemArg: values.system,
+          configPathArg: values.config,
+          outArg: values.out,
+        });
+        for (const p of pdfRes.generated) console.log(`wrote ${p}`);
+        for (const f of pdfRes.failures) console.error(`pdf: ${f}`);
+        return pdfRes.failures.length > 0 ? 2 : 0;
       }
 
       const { renderReportHtml } = await import('./report/html.ts');

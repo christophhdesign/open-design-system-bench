@@ -103,6 +103,42 @@ test('summary statistics over an even number of cells', () => {
   assert.deepEqual(stats.summary.dimensionMeans, { imports: 100, judgment: 65 });
 });
 
+test('mechanical composite removes judgment and renormalizes the remaining weights', () => {
+  // imports weight 0.10 of 0.70 mechanical total: a cell with only imports at
+  // 50 and judgment at 0 has a mechanical composite of 50, not 7.1.
+  const stats = statsFor([
+    record('t1', 'bare', 10, 'fail', [dim('imports', 50), dim('judgment', 0)]),
+    record('t1', 'skill', 100, 'pass', [dim('imports', 100), dim('judgment', 100)]),
+    record('t2', 'bare', 100, 'pass', [dim('imports', 100), dim('apiFidelity', 100), dim('judgment', 40)]),
+  ]);
+
+  assert.equal(stats.mechanical.cellCount, 3);
+  assert.equal(stats.mechanical.composite, (50 + 100 + 100) / 3);
+  assert.equal(stats.mechanical.perfectCells, 2);
+  const bare = stats.mechanicalByContext.find((m) => m.context === 'bare');
+  assert.equal(bare?.composite, 75);
+  assert.equal(bare?.perfectCells, 1);
+  // The new aggregates are quotable numbers, like every other computed figure.
+  assert.ok(stats.allowedNumbers.some((n) => Math.abs(n - (50 + 100 + 100) / 3) < 0.01));
+});
+
+test('byTaskContext groups graded reps by task, context and model', () => {
+  const stats = statsFor([
+    record('t1', 'bare', 80, 'pass', [dim('imports', 80)]),
+    record('t1', 'skill', 100, 'pass', [dim('imports', 100)]),
+    record('t2', 'bare', 60, 'fail', [dim('imports', 60)]),
+  ]);
+
+  const t1Bare = stats.byTaskContext.find((t) => t.taskId === 't1' && t.context === 'bare');
+  assert.equal(t1Bare?.meanOverall, 80);
+  assert.equal(t1Bare?.cellCount, 1);
+  assert.deepEqual(t1Bare?.gateCounts, { pass: 1, review: 0, fail: 0 });
+  const t1Skill = stats.byTaskContext.find((t) => t.taskId === 't1' && t.context === 'skill');
+  assert.equal(t1Skill?.meanOverall, 100);
+  // Cross-context delta for the same task is an allowed number.
+  assert.ok(stats.allowedNumbers.some((n) => Math.abs(n - 20) < 0.001));
+});
+
 test('the median of an odd number of cells is the middle value', () => {
   const stats = statsFor([
     record('t1', 'bare', 10, 'pass', [dim('imports', 10)]),

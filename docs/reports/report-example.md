@@ -70,6 +70,8 @@ results:
     review: 1
     fail: 1
   perfectCells: 1
+  mechanicalComposite: 91.0714
+  mechanicallyPerfectCells: 3
   costUsd: 3.6
   wallClockMs: 1440000
   inputTokens: null
@@ -96,6 +98,7 @@ results:
         pass: 1
         review: 1
         fail: 0
+      mechanicalComposite: 100
     - context: skill
       cellCount: 2
       meanOverall: 80.75
@@ -110,6 +113,7 @@ results:
         pass: 1
         review: 0
         fail: 1
+      mechanicalComposite: 82.1429
 audit:
   basis: partial-behavioral
   composite: 82

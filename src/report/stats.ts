@@ -101,6 +101,38 @@ export interface ContextStats {
   gateCounts: Record<Gate, number>;
 }
 
+/**
+ * The mechanical composite: per cell, the weighted mean of the five
+ * mechanical dimensions with `judgment` removed and the remaining weights
+ * renormalized, then averaged over graded cells. It answers "did the agent
+ * misuse the system" without depending on a model judge, which is why the
+ * reference reports quote it beside the judged mean. Computed here, once,
+ * so the markdown, HTML and PDF surfaces can never disagree on it.
+ */
+export interface MechanicalStats {
+  /** Mean per-cell mechanical composite over graded cells; null when no cell carries a mechanical dimension. */
+  composite: number | null;
+  /** Graded cells whose mechanical composite is at the ceiling (>= 99.995). */
+  perfectCells: number;
+  /** Graded cells the composite was computed over. */
+  cellCount: number;
+}
+
+export interface MechanicalContextStats extends MechanicalStats {
+  context: string;
+}
+
+/** Mean overall per (task, context, model) over graded reps: the by-task-and-context matrix. */
+export interface TaskContextStats {
+  taskId: string;
+  context: string;
+  model: string;
+  /** Graded reps the mean covers. */
+  cellCount: number;
+  meanOverall: number;
+  gateCounts: Record<Gate, number>;
+}
+
 /** One thing the report is required to address. What it *says* is the agent's own. */
 export type CoverageItem =
   | { key: string; label: string; match: { kind: 'cell'; cellKey: string; taskId: string; rep: number } }
@@ -149,6 +181,9 @@ export interface ReportStats {
     dimensionMeans: Record<string, number>;
   };
   byContext: ContextStats[];
+  mechanical: MechanicalStats;
+  mechanicalByContext: MechanicalContextStats[];
+  byTaskContext: TaskContextStats[];
   auditChecks: AuditCheckResult[];
   auditScore: AuditScore;
   coverage: CoverageItem[];
@@ -311,6 +346,57 @@ export function buildReportStats(
 
   const taskIds = [...new Set(cells.map((c) => c.taskId))].sort();
 
+  // Mechanical composite per graded cell: every dimension except judgment,
+  // weights renormalized over the mechanical dimensions the cell actually
+  // carries, so a mechanical-only grading is not capped below 100.
+  const mechanicalWeights = Object.entries(rubric.weights).filter(([dim]) => dim !== 'judgment');
+  const mechanicalOf = (c: StatsCell): number | null => {
+    let weightSum = 0;
+    let weighted = 0;
+    for (const [dim, w] of mechanicalWeights) {
+      const score = c.dimensions[dim];
+      if (typeof score !== 'number') continue;
+      weightSum += w;
+      weighted += w * score;
+    }
+    return weightSum > 0 ? weighted / weightSum : null;
+  };
+  const mechanicalFor = (subset: StatsCell[]): MechanicalStats => {
+    const values = subset.map(mechanicalOf).filter((v): v is number => v !== null);
+    return {
+      composite: values.length > 0 ? mean(values) : null,
+      perfectCells: values.filter((v) => v >= 99.995).length,
+      cellCount: values.length,
+    };
+  };
+  const mechanical = mechanicalFor(ok);
+  const mechanicalByContext: MechanicalContextStats[] = contexts.map((context) => ({
+    context,
+    ...mechanicalFor(ok.filter((c) => c.context === context)),
+  }));
+
+  const byTaskContext: TaskContextStats[] = [];
+  for (const taskId of taskIds) {
+    const taskCells = ok.filter((c) => c.taskId === taskId);
+    const modelsForTask = [...new Set(taskCells.map((c) => c.model))].sort();
+    for (const context of contexts) {
+      for (const model of modelsForTask) {
+        const group = taskCells.filter((c) => c.context === context && c.model === model);
+        if (group.length === 0) continue;
+        const gates = emptyGates();
+        for (const c of group) if (c.gate) gates[c.gate] += 1;
+        byTaskContext.push({
+          taskId,
+          context,
+          model,
+          cellCount: group.length,
+          meanOverall: mean(group.map((c) => c.overall as number)),
+          gateCounts: gates,
+        });
+      }
+    }
+  }
+
   return {
     systemId,
     primaryRunId: run.runId,
@@ -322,11 +408,14 @@ export function buildReportStats(
     dimensionIds,
     summary,
     byContext,
+    mechanical,
+    mechanicalByContext,
+    byTaskContext,
     auditChecks,
     auditScore,
     coverage: buildCoverage(cells, records, auditChecks),
     leads: buildLeads(cells, records, auditChecks),
-    allowedNumbers: buildAllowedNumbers({ cells, summary, byContext, dimensionIds, auditChecks, auditScore, taskIds, extraction }),
+    allowedNumbers: buildAllowedNumbers({ cells, summary, byContext, mechanical, mechanicalByContext, byTaskContext, dimensionIds, auditChecks, auditScore, taskIds, extraction }),
     config,
   };
 }
@@ -473,6 +562,9 @@ function buildAllowedNumbers(input: {
   cells: StatsCell[];
   summary: ReportStats['summary'];
   byContext: ContextStats[];
+  mechanical: MechanicalStats;
+  mechanicalByContext: MechanicalContextStats[];
+  byTaskContext: TaskContextStats[];
   dimensionIds: string[];
   auditChecks: AuditCheckResult[];
   auditScore: AuditScore;
@@ -526,6 +618,31 @@ function buildAllowedNumbers(input: {
     add(ctx.meanOverall);
     for (const v of Object.values(ctx.dimensionMeans)) add(v);
     for (const g of Object.values(ctx.gateCounts)) add(g);
+  }
+
+  // Mechanical composite, overall and per context, plus the task-by-context
+  // means: the aggregates the PDF and any prose summary quote side by side.
+  add(input.mechanical.composite);
+  add(input.mechanical.perfectCells);
+  add(input.mechanical.cellCount);
+  for (const m of input.mechanicalByContext) {
+    add(m.composite);
+    add(m.perfectCells);
+    add(m.cellCount);
+  }
+  for (const t of input.byTaskContext) {
+    add(t.cellCount);
+    add(t.meanOverall);
+    for (const g of Object.values(t.gateCounts)) add(g);
+  }
+  // The same task in two contexts is the comparison the benchmark exists to
+  // make, at task granularity: let prose quote that delta.
+  for (const a of input.byTaskContext) {
+    for (const b of input.byTaskContext) {
+      if (a.taskId === b.taskId && a.model === b.model && a.context !== b.context) {
+        add(a.meanOverall - b.meanOverall);
+      }
+    }
   }
 
   // Context-to-context deltas: overall means, per-dimension means, and the
@@ -633,6 +750,8 @@ export function buildGeneratedFrontMatter(stats: ReportStats, run: RunResults): 
       maxOverall: round(s.maxOverall),
       gateCounts: s.gateCounts,
       perfectCells: s.perfectCells,
+      mechanicalComposite: round(stats.mechanical.composite),
+      mechanicallyPerfectCells: stats.mechanical.perfectCells,
       costUsd: round(s.costUsd),
       wallClockMs: s.wallClockMs,
       inputTokens: s.inputTokens,
@@ -644,6 +763,9 @@ export function buildGeneratedFrontMatter(stats: ReportStats, run: RunResults): 
         meanOverall: round(c.meanOverall),
         dimensionMeans: roundMap(c.dimensionMeans),
         gateCounts: c.gateCounts,
+        mechanicalComposite: round(
+          stats.mechanicalByContext.find((m) => m.context === c.context)?.composite ?? null,
+        ),
       })),
     },
     audit: {

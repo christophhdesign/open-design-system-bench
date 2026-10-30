@@ -189,3 +189,12 @@ test('a component family named by its head is supported by its parts', () => {
   // ...but a name that is only a prefix of an unrelated word is still absent.
   assert.deepEqual(contradictedClaims(verdict('Uses the Button component for the cancel action.'), parts, chakra).map((c) => c.name), ['Button']);
 });
+
+test('a claim naming the imported package is supported by that import', () => {
+  // Verbatim from the ReactKit baseline (2026-10-29): true, and once flagged.
+  const diff = ['+++ b/src/task/index.tsx', "+import { useId, useState, type FormEvent } from 'react';", '+export const X = () => <input />;'].join('\n');
+  const reasoning = 'The diff imports only React hooks and hand-writes a bare <input> for the password field.';
+  assert.deepEqual(contradictedClaims(verdict(reasoning), diff, catalog('reactkit', ['Input', 'Button'])), []);
+  // A component still has to be imported itself.
+  assert.deepEqual(contradictedClaims(verdict('Code imports Input from the design system.'), diff, catalog('reactkit', ['Input'])).map((c) => c.name), ['Input']);
+});
