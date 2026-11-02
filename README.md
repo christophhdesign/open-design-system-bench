@@ -22,24 +22,29 @@ The harness ships with a **generic starter config** (`systems.config.json`, a si
 placeholder system) and the `init` wizard to fill it in. Nothing here is specific to one design
 system: point it at yours and every check, fixture, and grader resolves from your own config.
 
-## What's new (v1.3, October 2026)
+## What's new (v1.5, October 2026)
 
-A screenshot gallery of what the agents built, four opt-in hard tasks, and a bare run that is
-really bare. Full notes in [CHANGELOG.md](CHANGELOG.md).
+PDF reports you can hand to someone who will never open a run folder, and nine fixes that make
+every score say what it measured. Full notes in [CHANGELOG.md](CHANGELOG.md); v1.3 added the UI
+gallery, the opt-in hard tasks and truly bare cells.
 
-- **UI gallery.** `gallery [<runDir>...]` builds every ok cell, captures it with headless
-  Chrome, and lays the screenshots out per context level and rep next to their scores, with a
-  task picker, gate filter and size slider. A cell that scores 81 and renders an empty page is
-  finally visible as such.
-- **Hard tasks, opt-in.** `tasks/hard/` adds bulk selection with a confirmed destructive
-  action, an async lookup with every loading state, in-place editing with an unsaved-changes
-  guard, and a keyboard-driven action finder. `--hard` or the `hard` profile includes them.
-- **Bare means bare.** Cells no longer see the operator's `~/.claude/CLAUDE.md`, skills, hooks
-  or memory, nor this repo's own instructions. Compare older baselines with that in mind.
-- **Extraction and grading.** A Vite-style solution `tsconfig.json` is followed to the project
-  that compiles the components (or set `tsconfig`); tokenDiscipline reads `.css` and `.scss`.
-- **Gateways.** `"stream": true` on a provider for gateways that time out on long single-shot
-  generations; `pricing-catalog.json` supplies real `max_tokens` and prices.
+- **PDF reports.** A finished `run` writes `report-<system>.pdf` next to its results: methodology,
+  results by context and by task, the AI-Readiness audit, validity limits derived from the run's
+  own shape, and a "coverage owed" table that marks every unexplained failure as unaddressed.
+  `report --pdf <report.md>` prints an authored written report, but only after it validates. See
+  [PDF reports](#pdf-reports).
+- **Mechanical composite.** `report --stats` computes the score with the judge removed (the five
+  mechanical dimensions, weights renormalized) and the count of mechanically perfect cells, so
+  markdown, HTML and PDF quote the same values.
+- **One look for every HTML surface.** report, compare, gallery and leaderboard share one token
+  set with the PDF, light and dark, with score bars beside the printed numbers.
+- **Measurement integrity.** Rubrics a system cannot satisfy are withheld, not failed; judge
+  claims are checked against the diff; system-side type errors no longer fail `compile`; `ci` is
+  inconclusive instead of green when it measured nothing; Lift is paired on system, model and
+  task; the leaderboard ranks static and run-backed scores separately.
+
+Scores and `ci` verdicts move with this release: set a new baseline before comparing against older
+runs.
 
 ## What gets measured
 
@@ -275,7 +280,8 @@ cells are compared. The `small` task list is the five most discriminating tasks 
 clear component-choice traps); rotate it if a different area gets risky.
 
 Every run lands in `runs/<timestamp>-<label>/` with `manifest.json`, `results.json`,
-`report.html`, and per-cell artifacts (`diff.patch`, `transcript.jsonl`, `grades.json`,
+`report.html`, one `report-<system>.pdf` per system (see [PDF reports](#pdf-reports)), and per-cell
+artifacts (`diff.patch`, `transcript.jsonl`, `grades.json`,
 `judge.json`, the generated `workspace/src`). Serve reports via the workspace launch config
 `open-design-system-bench` → http://localhost:4189.
 
@@ -328,7 +334,9 @@ Reports are written by an agent. The split that makes them trustworthy:
 
 - **The data layer is fixed.** `--stats` emits the front matter and the computed sections
   (executive summary, config, extraction, axis primer, per-cell and by-context tables) as finished
-  markdown. The author pastes them verbatim and never does arithmetic. `--validate` re-renders them
+  markdown, including the mechanical composite (the score with judgment removed and the other
+  weights renormalized) and the count of mechanically perfect cells. The author pastes them
+  verbatim and never does arithmetic. `--validate` re-renders them
   and fails on a byte difference.
 - **The interpretation layer is free.** Findings, notable results, validity limits and
   recommendations are the author's, and two authors will write them differently, the way two human

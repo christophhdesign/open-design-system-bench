@@ -2,18 +2,22 @@
 
 What changed in open-design-system-bench, newest first. The project is GitHub-first (clone and run, no npm package), so dates are the record rather than published versions.
 
-## Unreleased: PDF reports
+## 1.5.0, 2026-10-30
 
-### Added
+PDF reports and the measurement-integrity fixes ship together as 1.5.0; there was no 1.4.0.
+
+### PDF reports
+
+#### Added
 
 - **PDF reports in two flavors.** `report --pdf --run <dir>` renders an instant PDF computed from run data only (cover, contents, executive headline, methodology, axis primer, results by context and by task, the AI-Readiness audit, validity limits derived from the run's shape, the coverage list with every owed item marked unaddressed, and all-cells and reproducing appendices). `report --pdf <report.md>` renders an authored written report, validated first and refused on any validation error, with a runs-in-scope table when the report carries supporting runs. A finished `run` writes the instant PDF automatically, one `report-<system>.pdf` per system; a paused run defers it to the resume that finishes it, `--no-pdf` skips it, and a PDF failure warns without ever changing the run's exit code. Printing reuses the gallery's headless Chrome (no new dependency); without Chrome the print HTML is written next to the target instead. Gallery screenshots that already exist are embedded in an appendix; the PDF never builds or screenshots anything itself. Chrome cannot print a footer with page numbers, so the contents lists sections without page numbers: a deliberate v1 trade.
 - **Mechanical composite and by-task-by-context aggregates in `report --stats`.** The weighted mean of the five mechanical dimensions with judgment removed and weights renormalized (per cell, then averaged, overall and per context), the count of mechanically perfect cells, and mean overall per task, context and model are now computed once in `src/report/stats.ts`, added to the numbers prose may quote, and emitted in the generated front matter (`mechanicalComposite`, `mechanicallyPerfectCells`; the schema gained both as optional fields). Every surface (markdown, HTML, PDF) reads the same values.
 
-## Unreleased: measurement integrity
+### Measurement integrity
 
 The nine instrument fixes the roadmap put ahead of any new measurement, each measured on its own with a cheap model before the next landed. Expect judgment scores to move on systems missing a presumed component, Mantine-style monorepos to stop failing `compile`, `ci` to answer inconclusive where it used to pass on no data, and Lift to move on unbalanced runs. Set a new baseline before comparing against older runs.
 
-### Added
+#### Added
 
 - **Rubrics that know the catalog.** A rubric can declare `presumes: <affordance>`; on a system whose catalog exports none of the affordance's names (`src/tasks/affordances.ts`, extended per system by `SystemConfig.affordances`) it is withheld rather than failed, its weight goes to the other rubrics, report.html says why, and `validate-tasks` lists it. `password-visibility`'s critical `builtin-affordance` rubric presumes `text-input`.
 - **Judge claims checked against the diff.** A rationale that says a name is imported, or a catalog component is used, when no added line supports it caps the cell at review and is shown with the rationale. Narrow by design: negated claims and non-catalog names are skipped.
@@ -21,7 +25,7 @@ The nine instrument fixes the roadmap put ahead of any new measurement, each mea
 - **Per-profile `judgeSamples`.** The `full` profile takes three judge samples per cell. Each cell records `judgedBy` or `judgeMissing`; report.html prints the judge and its coverage; `compare` warns when two runs were judged differently.
 - **Per-system `leakAllowlist`**, merged over the global list for that system only. `validate-tasks` names the word to add on each leak failure, and `init` proposes entries from the barrel without writing them.
 
-### Changed
+#### Changed
 
 - `grade` re-scores stored `judge.json` verdicts under current rules instead of keeping the stored judgment dimension verbatim. No model call.
 - Every workspace gets one shared `README.md` (where to work, nothing about the design system) and a template's own README is replaced, so source and npm fixtures show the agent the same text. `fixtures/npm-app/README.md` is gone.
@@ -38,7 +42,7 @@ The nine instrument fixes the roadmap put ahead of any new measurement, each mea
 - **Leaderboard cohorts.** Static-only, full-run and partial-run composites are ranked in separate
   tables, so a static composite no longer outranks a run-backed one on a different scale.
 
-### Fixed
+#### Fixed
 
 - **Mantine-style monorepos compiled every cell as a failure.** The source fixture now inherits the
   scoped package aliases a system's own tsconfigs declare, so sibling packages (`@mantine/hooks`)
