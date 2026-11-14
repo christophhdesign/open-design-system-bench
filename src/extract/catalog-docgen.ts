@@ -93,8 +93,8 @@ interface ReexportTarget {
  * `<spec>/index.ts(x)`, but barrel entries can also name a bare module file
  * directly rather than a directory. `spec` is the raw specifier
  * (`./components`, `./components/index.js`, `./Icon/Icon.Skeleton`) —
- * expandSpecBases handles NodeNext-style `.js`/`.jsx`/`.mjs` extensions
- * before candidate expansion.
+ * expandSpecBases strips NodeNext-style `.js`/`.jsx`/`.mjs` and bundler-style
+ * `.ts`/`.tsx`/`.mts` extensions before candidate expansion.
  */
 function resolveReexportTarget(baseDir: string, spec: string): ReexportTarget | undefined {
   for (const base of expandSpecBases(spec)) {
