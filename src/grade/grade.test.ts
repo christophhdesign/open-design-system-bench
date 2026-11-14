@@ -104,6 +104,23 @@ test('gradeImports flags a disallowed foreign import', () => {
   assert.ok(result.diffs.some((d) => d.message.includes('antd')));
 });
 
+test('gradeImports allows a configured extra package and its subpaths, and nothing it merely prefixes', () => {
+  const files = [
+    file(
+      'src/App.tsx',
+      `import { ConfirmDialog } from '@acme-ui/recipes';\nimport '@acme-ui/recipes/styles.css';\nimport { Old } from '@acme-ui/recipes-legacy';\n`,
+    ),
+  ];
+  const without = gradeImports(makeCtx(files));
+  assert.equal(without.diffs.length, 3, 'unconfigured, all three are foreign');
+  const ctx = { ...makeCtx(files), systemCfg: { ...systemCfg, extraPackages: [{ pkg: '@acme-ui/recipes', src: 'packages/recipes/src' }] } };
+  const result = gradeImports(ctx);
+  assert.deepEqual(
+    result.diffs.map((d) => d.message),
+    ["Disallowed import '@acme-ui/recipes-legacy' in src/App.tsx"],
+  );
+});
+
 // ---------------------------------------------------------------------------
 // apiFidelity
 // ---------------------------------------------------------------------------

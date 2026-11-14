@@ -38,6 +38,8 @@ export default defineConfig({
         find: new RegExp(`^${pkgPattern}$`),
         replacement: `${SYSTEM_ROOT}/__COMPONENTS_SRC__/index.ts`,
       },
+      // The system's other packages (SystemConfig.extraPackages), same two shapes.
+      // __EXTRA_PACKAGE_ALIASES__
       {
         find: '__FOUNDATIONS_PKG__/index.css',
         replacement: `${SYSTEM_ROOT}/__FOUNDATIONS_CSS__`,
