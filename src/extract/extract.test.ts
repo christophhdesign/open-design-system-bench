@@ -286,6 +286,35 @@ test('resolveReexportTarget resolves a .js-suffixed direct named re-export (expo
   assert.ok(names.includes('Foo'));
 });
 
+test('re-exports with explicit TypeScript extensions (allowImportingTsExtensions) keep their dir and props', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'odsys-extract-ts-ext-'));
+  const src = join(root, 'src');
+  mkdirSync(join(src, 'Button'), { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@test/ts-ext' }));
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react-jsx', allowImportingTsExtensions: true, noEmit: true } }));
+
+  // A bundler-style barrel (allowImportingTsExtensions) names the source files
+  // themselves. './Button/index.ts' must resolve like './Button', not to a
+  // 'Button/index' dir that doesn't exist, or docgen extracts the export with
+  // no props; './Button.tsx' and './helpers.ts' must strip to bases the
+  // candidate expansion can match.
+  writeFileSync(join(src, 'index.ts'), "export { Button } from './Button/index.ts';\nexport * from './helpers.ts';\n");
+  writeFileSync(join(src, 'Button', 'index.ts'), "export { Button } from './Button.tsx';\n");
+  writeFileSync(
+    join(src, 'Button', 'Button.tsx'),
+    "export interface ButtonProps {\n  /** Visual weight. */\n  variant?: 'primary' | 'secondary';\n}\nexport const Button = (props: ButtonProps) => <button data-variant={props.variant} />;\n",
+  );
+  writeFileSync(join(src, 'helpers.ts'), 'export const helperLabel = (s: string): string => s.trim();\n');
+
+  const catalog = await extractDocgenCatalog('synthetic', makeConfig(root));
+  const button = catalog.components.find((c) => c.exports.some((e) => e.displayName === 'Button'));
+  assert.ok(button, `Button missing from ${JSON.stringify(catalog.components.map((c) => c.dir))}`);
+  assert.equal(button.dir, 'Button');
+  const props = button.exports.find((e) => e.displayName === 'Button')!.props.map((p) => p.name);
+  assert.ok(props.includes('variant'), `variant missing from Button props ${JSON.stringify(props)}`);
+  assert.ok(catalog.allExports.includes('helperLabel'), 'export * through a .ts specifier missing from allExports');
+});
+
 test('a re-export resolving outside componentsSrc but inside the system root is followed, not dropped', async () => {
   const root = mkdtempSync(join(tmpdir(), 'odsys-extract-outside-srcdir-'));
   const src = join(root, 'src');
