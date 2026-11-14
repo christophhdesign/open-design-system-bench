@@ -58,6 +58,9 @@ const FOUNDATIONS_CSS_FALLBACK = 'foundations-css-not-configured.css';
 // paths block; substitutePlaceholders replaces the whole line with the
 // system's own package aliases (systemTsPaths), or drops it when there are none.
 const SYSTEM_TS_PATHS_LINE = /^([ \t]*)"__SYSTEM_TS_PATHS__": \[\],[ \t]*\n/m;
+// The vite alias-array line source-app carries for SystemConfig.extraPackages;
+// replaced with their entries, or dropped when there are none.
+const EXTRA_PACKAGE_ALIASES_LINE = /^([ \t]*)\/\/ __EXTRA_PACKAGE_ALIASES__[ \t]*\n/m;
 
 function readTsconfigOptions(tsconfigPath: string): ts.CompilerOptions | undefined {
   const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
@@ -108,8 +111,41 @@ export function systemTsPaths(cfg: Pick<SystemConfig, 'root' | 'componentsSrc' |
   return out;
 }
 
+/**
+ * tsconfig aliases for SystemConfig.extraPackages, shaped like the template's
+ * own componentsPkg pair: the bare name to `<src>/index.ts`, subpaths to `<src>/*`.
+ */
+export function extraPackageTsPaths(cfg: Pick<SystemConfig, 'root' | 'extraPackages'>): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const { pkg, src } of cfg.extraPackages ?? []) {
+    out[pkg] = [join(resolve(cfg.root), src, 'index.ts')];
+    out[`${pkg}/*`] = [join(resolve(cfg.root), src, '*')];
+  }
+  return out;
+}
+
+/**
+ * Vite alias entries for SystemConfig.extraPackages, as source text for the
+ * template's alias array. Same anchored-regex shape as the componentsPkg
+ * entries, built from escaped strings for the same reason (a scoped name's
+ * slash would close a regex literal).
+ */
+function renderExtraPackageViteAliases(cfg: SystemConfig, indent: string): string {
+  return (cfg.extraPackages ?? [])
+    .map(({ pkg, src }) => {
+      const pattern = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const dir = join(resolve(cfg.root), src);
+      return (
+        `${indent}{ find: new RegExp(${JSON.stringify(`^${pattern}/(.+)$`)}), replacement: ${JSON.stringify(`${dir}/$1`)} },\n` +
+        `${indent}{ find: new RegExp(${JSON.stringify(`^${pattern}$`)}), replacement: ${JSON.stringify(join(dir, 'index.ts'))} },\n`
+      );
+    })
+    .join('');
+}
+
 function renderSystemTsPaths(cfg: SystemConfig, indent: string): string {
-  return Object.entries(systemTsPaths(cfg))
+  // Explicitly configured extras win over an inherited alias for the same name.
+  return Object.entries({ ...systemTsPaths(cfg), ...extraPackageTsPaths(cfg) })
     .map(([key, targets]) => `${indent}${JSON.stringify(key)}: ${JSON.stringify(targets)},\n`)
     .join('');
 }
@@ -502,6 +538,7 @@ export function substitutePlaceholders(destDir: string, cfg: SystemConfig): void
     if (!existsSync(filePath)) continue;
     const next = readFileSync(filePath, 'utf8')
       .replace(SYSTEM_TS_PATHS_LINE, (_line, indent: string) => renderSystemTsPaths(cfg, indent))
+      .replace(EXTRA_PACKAGE_ALIASES_LINE, (_line, indent: string) => renderExtraPackageViteAliases(cfg, indent))
       .split(SYSTEM_ROOT_PLACEHOLDER).join(cfg.root)
       .split(COMPONENTS_PKG_PLACEHOLDER).join(cfg.componentsPkg)
       .split(FOUNDATIONS_PKG_PLACEHOLDER).join(cfg.foundationsPkg)

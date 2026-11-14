@@ -125,6 +125,7 @@ there (or pass `--systems a,b`) to benchmark several at once.
 | `rootEnv` | yes | Env var name that can override `root` (e.g. for CI) |
 | `componentsSrc` | yes | Path (relative to `root`) to the components source dir |
 | `componentsPkg` / `foundationsPkg` | yes | The npm package names your system's components/tokens are imported from |
+| `extraPackages` | no | Further packages of the system agents may import, as `[{ "pkg": "@acme/recipes", "src": "packages/recipes/src" }]`: allowed by the imports grader and aliased to source (`src`, entry `index.ts`) in source mode. Use it when your docs send agents to a recipes or icons package; apiFidelity still checks `componentsPkg` only |
 | `foundationsCss` | no | Path to the foundations CSS tokens are parsed from, or a list of paths when the system splits tokens across one file per category (read as one concatenated document); omit if none |
 | `catalogStrategy` | yes | `"docgen"` (extract via react-docgen-typescript), `"catalog-json"` (read a pre-built catalog file), or `"stencil"` (read the `docs.json` a Stencil build emits) |
 | `catalogFile` | `catalog-json` and `stencil` | Path to the pre-built catalog JSON, or to Stencil's `docs.json` |

@@ -42,6 +42,16 @@ export interface SystemConfig {
   componentsPkg: string; // e.g. "@your-scope/components"
   foundationsPkg: string;
   /**
+   * Further packages of the same system an agent may import, besides
+   * componentsPkg and foundationsPkg: the recipes or icons package of a
+   * layered monorepo. Without them, a system whose own docs send agents to
+   * `@acme/recipes` fails imports and compile on every cell that follows the
+   * docs. Each is allowed by the imports grader and, in source mode, aliased to
+   * `src` (relative to root, entry `index.ts`) the way componentsPkg is aliased
+   * to componentsSrc. Not catalogued: apiFidelity still checks componentsPkg only.
+   */
+  extraPackages?: { pkg: string; src: string }[];
+  /**
    * Path(s) (relative to root) to the foundations CSS the token set is parsed
    * from. Accepts an array because plenty of systems split their tokens across
    * one file per category (one production system ships nineteen: palette.css,

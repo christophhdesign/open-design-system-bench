@@ -15,7 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { applyFoundationsCssPlaceholder, copyTemplate, substitutePlaceholders, systemTsPaths, WORKSPACE_README } from './fixture.ts';
+import { applyFoundationsCssPlaceholder, copyTemplate, extraPackageTsPaths, substitutePlaceholders, systemTsPaths, WORKSPACE_README } from './fixture.ts';
 import { attributeTscErrors, gradeCompile } from '../grade/mechanical/compile.ts';
 import type { GradeContext } from '../grade/context.ts';
 import { PKG_ROOT, paths } from '../config.ts';
@@ -275,6 +275,29 @@ test('source-app alias patterns survive a componentsPkg containing regex metacha
   }
 });
 
+test('source-app aliases each extra package in tsconfig and vite, and only when configured', () => {
+  const cfg = baseSourceConfig({ extraPackages: [{ pkg: '@acme/recipes', src: 'packages/recipes/src' }] });
+  const dir = stageSourceApp(cfg);
+  const plain = stageSourceApp(baseSourceConfig());
+  try {
+    assert.equal(resolveAlias(dir, '@acme/recipes'), '/systems/acme-ui/packages/recipes/src/index.ts');
+    assert.equal(resolveAlias(dir, '@acme/recipes/confirm'), '/systems/acme-ui/packages/recipes/src/confirm');
+    assert.equal(resolveAlias(dir, '@acme/recipes-legacy'), undefined);
+    // The components entries still resolve, and still win for their own package.
+    assert.equal(resolveAlias(dir, '@acme/components'), '/systems/acme-ui/packages/components/src/index.ts');
+    assert.deepEqual(extraPackageTsPaths(cfg), {
+      '@acme/recipes': ['/systems/acme-ui/packages/recipes/src/index.ts'],
+      '@acme/recipes/*': ['/systems/acme-ui/packages/recipes/src/*'],
+    });
+    assert.match(readFileSync(join(dir, 'tsconfig.json'), 'utf8'), /"@acme\/recipes": \["\/systems\/acme-ui\/packages\/recipes\/src\/index\.ts"\]/);
+    for (const d of [dir, plain]) assert.ok(!readFileSync(join(d, 'vite.config.ts'), 'utf8').includes('__EXTRA_PACKAGE_ALIASES__'), 'placeholder always replaced');
+    assert.equal(resolveAlias(plain, '@acme/recipes'), undefined, 'unconfigured: no alias');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(plain, { recursive: true, force: true });
+  }
+});
+
 test('custom-elements-app resolves the same two alias shapes', () => {
   const cfg = baseSourceConfig({ componentModel: 'custom-elements', componentsSrc: 'src' });
   const dir = mkdtempSync(join(tmpdir(), 'odsys-ce-app-'));
@@ -362,6 +385,37 @@ test('a monorepo sibling resolves through the system tsconfig paths, and fails w
 
     writeFileSync(join(ws, 'tsconfig.json'), tsconfig.replace(/^.*"@acme\/\*".*\n/m, ''));
     assert.match(tsc(), /packages\/ui\/src\/index\.ts.*TS2307: Cannot find module '@acme\/hooks'/, 'without them: the old failure, in the system source');
+  } finally {
+    cleanup();
+  }
+});
+
+test('agent code importing an extra package compiles only once it is configured', () => {
+  const { root, ws, cfg, agentCode, cleanup } = stageMonorepo();
+  try {
+    mkdirSync(join(root, 'packages/recipes/src'), { recursive: true });
+    writeFileSync(join(root, 'packages/recipes/src/index.ts'), 'export function confirmLabel(s: string): string { return `Confirm ${s}`; }\n');
+    // A root that maps no scope, so the recipes package resolves through extraPackages alone.
+    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { paths: { '@acme/hooks': ['./packages/hooks/src'] } } }));
+    const tsc = () => {
+      try {
+        execFileSync(join(PKG_ROOT, 'node_modules/.bin/tsc'), ['--noEmit', '-p', join(ws, 'tsconfig.json')], { encoding: 'utf8' });
+        return '';
+      } catch (err) {
+        return String((err as { stdout?: string }).stdout ?? err);
+      }
+    };
+    // Re-stages the template the way stageMonorepo does, keeping only the agent's file in src.
+    const stage = (extra?: SystemConfig['extraPackages']) => {
+      copyTemplate(SOURCE_APP_DIR, ws);
+      substitutePlaceholders(ws, { ...cfg, extraPackages: extra });
+      rmSync(join(ws, 'src'), { recursive: true });
+      agentCode("import { confirmLabel } from '@acme/other-recipes';\nexport const label: string = confirmLabel('delete');\n");
+    };
+    stage();
+    assert.match(tsc(), /TS2307: Cannot find module '@acme\/other-recipes'/);
+    stage([{ pkg: '@acme/other-recipes', src: 'packages/recipes/src' }]);
+    assert.equal(tsc(), '');
   } finally {
     cleanup();
   }

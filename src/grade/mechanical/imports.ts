@@ -1,6 +1,7 @@
 // Dimension: imports (weight .10)
-// Flags any import source that isn't the system's own packages, React/Vite
-// infrastructure, a relative import, or an explicitly task-allowlisted extra.
+// Flags any import source that isn't the system's own packages (including its
+// configured extraPackages), React/Vite infrastructure, a relative import, or
+// an explicitly task-allowlisted extra.
 
 import type { DimensionResult, Diff, Gate } from '../../types.ts';
 import type { GradeContext } from '../context.ts';
@@ -24,6 +25,7 @@ function isAllowed(source: string, ctx: GradeContext): boolean {
   if (isRelative(source)) return true;
   if (matchesPkg(source, ctx.systemCfg.componentsPkg)) return true;
   if (matchesPkg(source, ctx.systemCfg.foundationsPkg)) return true;
+  if ((ctx.systemCfg.extraPackages ?? []).some(({ pkg }) => matchesPkg(source, pkg))) return true;
   if (matchesPrefixList(source, REACT_PREFIXES)) return true;
   if (matchesPrefixList(source, VITE_PREFIXES)) return true;
   const extra = ctx.task.mechanicalOverrides?.extraAllowedImports ?? [];
